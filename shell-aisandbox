@@ -1,0 +1,45 @@
+#!/bin/sh
+# Open an interactive shell, or run a command, in the aisandbox
+# container started by run-aisandbox.
+#
+# Usage: shell-aisandbox [command [args ...]]
+#   With no arguments an interactive login shell is started.
+#
+# Environment:
+#   AISANDBOX_NAME  container name (default: aisandbox)
+
+set -eu
+
+NAME="${AISANDBOX_NAME:-aisandbox}"
+
+if command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+elif command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+else
+    echo "error: neither podman nor docker is installed" >&2
+    exit 1
+fi
+
+if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    echo "error: container '${NAME}' is not running;" \
+        "start it with start-aisandbox" >&2
+    exit 1
+fi
+
+# Start the same shell used on the host when the image has it,
+# falling back to zsh then bash.
+if [ $# -eq 0 ]; then
+    hostsh="${SHELL##*/}"
+    set -- sh -c 'for s in '"${hostsh}"' zsh bash; do
+        command -v "${s}" >/dev/null && exec "${s}" -l
+    done
+    exec sh -l'
+fi
+
+# Allocate a tty only when we actually have one, so commands can
+# also be run from pipes and scripts.
+if [ -t 0 ]; then
+    exec "${ENGINE}" exec -it "${NAME}" "$@"
+fi
+exec "${ENGINE}" exec -i "${NAME}" "$@"

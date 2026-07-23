@@ -1,0 +1,69 @@
+#!/bin/sh
+# Update the aisandbox image: rebuild it from scratch so the base
+# image, OS packages, and all agents come in at their current
+# versions, then remove the image it replaces.
+#
+# A running container keeps using the old image; restart it with
+# stop-aisandbox and start-aisandbox to pick up the update.
+#
+# Usage: update-aisandbox
+#
+# Environment:
+#   AISANDBOX_IMAGE  image to build (default: aisandbox)
+#   AISANDBOX_NAME   container name (default: aisandbox)
+
+set -eu
+
+IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
+NAME="${AISANDBOX_NAME:-aisandbox}"
+
+if command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+elif command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+else
+    echo "error: neither podman nor docker is installed" >&2
+    exit 1
+fi
+
+# The Containerfile lives next to this script.
+cd "$(dirname "$0")"
+if [ ! -f Containerfile ]; then
+    echo "error: no Containerfile in $(pwd)" >&2
+    exit 1
+fi
+
+old_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
+    "${IMAGE}" 2>/dev/null || true)"
+
+# --pull refreshes the base image; --no-cache forces every step
+# to re-run so apt and the agent installers actually fetch
+# current versions instead of reusing cached layers.
+echo "rebuilding '${IMAGE}' without cache;" \
+    "this can take half an hour"
+"${ENGINE}" build --pull --no-cache \
+    --build-arg USERNAME="$(id -un)" \
+    --build-arg USERSHELL="${SHELL:-/bin/bash}" \
+    -t "${IMAGE}" -f Containerfile .
+
+new_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
+    "${IMAGE}")"
+
+if [ -z "${old_id}" ] || [ "${old_id}" = "${new_id}" ]; then
+    echo "image '${IMAGE}' is up to date"
+    exit 0
+fi
+
+# Remove only the image we replaced, not other dangling images.
+# Removal fails harmlessly if a running container still uses it.
+if "${ENGINE}" image rm "${old_id}" >/dev/null 2>&1; then
+    echo "old image removed"
+fi
+
+if "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    echo "container '${NAME}' is still on the old image;" \
+        "restart it with stop-aisandbox and start-aisandbox," \
+        "then run '${ENGINE} image prune -f'"
+else
+    echo "update complete"
+fi

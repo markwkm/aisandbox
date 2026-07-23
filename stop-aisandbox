@@ -1,0 +1,29 @@
+#!/bin/sh
+# Stop the aisandbox container started by start-aisandbox.  The
+# container removes itself when stopped.
+#
+# Usage: stop-aisandbox
+#
+# Environment:
+#   AISANDBOX_NAME  container name (default: aisandbox)
+
+set -eu
+
+NAME="${AISANDBOX_NAME:-aisandbox}"
+
+if command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+elif command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+else
+    echo "error: neither podman nor docker is installed" >&2
+    exit 1
+fi
+
+if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    echo "container '${NAME}' is not running" >&2
+    exit 0
+fi
+
+"${ENGINE}" stop "${NAME}" >/dev/null
+echo "container '${NAME}' stopped"

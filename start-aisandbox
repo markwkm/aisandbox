@@ -1,0 +1,157 @@
+#!/bin/sh
+# Start the aisandbox container (see Containerfile) detached in
+# the background, preferring podman and falling back to docker.
+# Open a shell inside it with shell-aisandbox.
+#
+# Mounts ~/.local/src read/write, plus the per-tool config, cache,
+# and state directories of the AI CLIs baked into the image, so
+# logins and history persist across container runs.
+#
+# Usage: start-aisandbox
+#
+# Environment:
+#   AISANDBOX_IMAGE  image to run (default: aisandbox)
+#   AISANDBOX_NAME   container name (default: aisandbox)
+#
+# Stop with stop-aisandbox; the container is removed
+# automatically when stopped.
+
+set -eu
+
+IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
+NAME="${AISANDBOX_NAME:-aisandbox}"
+
+if command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+elif command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+else
+    echo "error: neither podman nor docker is installed" >&2
+    exit 1
+fi
+
+if "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    echo "container '${NAME}' already exists;" \
+        "stop it with stop-aisandbox" >&2
+    exit 0
+fi
+
+# Home of the unprivileged user inside the image.  The image is
+# built with a user named after the invoking host user (see
+# update-aisandbox), so it matches the host home; agents key
+# per-project state on absolute paths, and this keeps sessions
+# resumable on both sides.
+CHOME="${HOME}"
+
+# Everything is built by PREPENDING to "$@" (options may appear
+# in any order as long as they precede the image name), keeping
+# the image and its idle command at the end.
+set -- "${IMAGE}" sleep infinity
+
+# Host directories mounted read/write at the same relative
+# location under the container user's home.  mkdir first so a
+# missing directory is not created root-owned by the engine.
+#
+#   .local/src                  source trees (requested)
+#   .aws                        AWS config, credentials, and SSO
+#                               token cache (Kiro/Bedrock)
+#   .claude                     Claude Code state and credentials
+#   .kiro                       Kiro global config (hardcoded path)
+#   .local/share/kiro-cli       Kiro CLI data
+#   .config/opencode            opencode config
+#   .local/share/opencode       opencode data (holds auth.json)
+#   .local/state/opencode       opencode state
+#   .cache/opencode             opencode cache
+#   .openclaw                   OpenClaw workspace and config
+#   .config/goose               goose config and secrets
+#   .local/share/goose          goose sessions and data
+#   .pi                         pi agent settings and sessions
+#   .aider                      aider caches and analytics
+for d in \
+    .local/src \
+    .aws \
+    .claude \
+    .kiro \
+    .local/share/kiro-cli \
+    .config/opencode \
+    .local/share/opencode \
+    .local/state/opencode \
+    .cache/opencode \
+    .openclaw \
+    .config/goose \
+    .local/share/goose \
+    .pi \
+    .aider
+do
+    mkdir -p "${HOME}/${d}"
+    set -- -v "${HOME}/${d}:${CHOME}/${d}" "$@"
+done
+
+# Claude Code also keeps global state (and, with some auth
+# methods, credentials) in the single file ~/.claude.json; seed it
+# so the mount is a file, not an engine-created directory.
+[ -f "${HOME}/.claude.json" ] || printf '{}\n' > "${HOME}/.claude.json"
+set -- -v "${HOME}/.claude.json:${CHOME}/.claude.json" "$@"
+
+# Convenience files and directories, mounted read-only and only
+# when they exist on the host.  The shell startup files cover
+# every common sh/bash/zsh/ksh file so shells behave as they do
+# on the host; ~/.cargo/env is included because ~/.zshenv
+# commonly sources it.
+for f in \
+    .gitconfig \
+    .quiltrc \
+    .aider.conf.yml \
+    .profile \
+    .bashrc \
+    .bash_profile \
+    .bash_login \
+    .bash_aliases \
+    .inputrc \
+    .zshrc \
+    .zshenv \
+    .zprofile \
+    .zlogin \
+    .zlogout \
+    .kshrc \
+    .cargo/env
+do
+    if [ -f "${HOME}/${f}" ]; then
+        set -- -v "${HOME}/${f}:${CHOME}/${f}:ro" "$@"
+    fi
+done
+if [ -d "${HOME}/.config/nvim" ]; then
+    set -- -v "${HOME}/.config/nvim:${CHOME}/.config/nvim:ro" "$@"
+fi
+
+# Pass through common API keys, but only those actually set.
+for v in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY \
+    OPENROUTER_API_KEY
+do
+    eval "val=\${${v}:-}"
+    if [ -n "${val}" ]; then
+        set -- -e "${v}" "$@"
+    fi
+done
+
+# No D-Bus secret service exists inside the container; tell goose
+# to keep secrets in ~/.config/goose instead of a keyring.
+set -- -e GOOSE_DISABLE_KEYRING=1 "$@"
+
+# Rootless podman: map the invoking user to uid/gid 1000 (the
+# image's "ubuntu" user) so mounted files keep sane ownership on
+# both sides.  Docker has no equivalent; ownership is correct
+# there only if the host uid is already 1000.
+if [ "${ENGINE}" = "podman" ]; then
+    set -- --userns=keep-id:uid=1000,gid=1000 "$@"
+fi
+
+# --init makes PID 1 a real init that forwards SIGTERM, so
+# "stop" is immediate instead of waiting out a 10 s timeout
+# before SIGKILLing the idle sleep.
+set -- run -d --rm --init --name "${NAME}" --hostname aisandbox \
+    -w "${CHOME}/.local/src" "$@"
+
+"${ENGINE}" "$@" >/dev/null
+echo "container '${NAME}' started;" \
+    "open a shell with shell-aisandbox"
