@@ -150,7 +150,7 @@ fi
 # "stop" is immediate instead of waiting out a 10 s timeout
 # before SIGKILLing the idle sleep.
 set -- run -d --rm --init --name "${NAME}" --hostname aisandbox \
-    -w "${CHOME}/.local/src" "$@"
+    --network host -w "${CHOME}/.local/src" "$@"
 
 "${ENGINE}" "$@" >/dev/null
 echo "container '${NAME}' started;" \
