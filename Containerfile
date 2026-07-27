@@ -153,14 +153,29 @@ RUN apt-get update \
         /usr/local/bin/perf
 
 # Node.js 24 (openclaw requires >= 22.22.3; 24.x covers all the
-# npm-installed agents).
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs
+# npm-installed agents), from NodeSource's repository.  The
+# repository is set up manually instead of running their
+# setup_24.x script: that script drives the plain "apt" command,
+# which warns that it has no stable CLI interface; the steps
+# here stick to apt-get, the stable scripting interface.
+RUN key=/etc/apt/keyrings/nodesource.gpg \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL \
+        https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o "${key}" \
+    && chmod a+r "${key}" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
+        "https://deb.nodesource.com/node_24.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 # Kiro CLI from the official Ubuntu package (installs system-wide,
 # unlike the per-user https://cli.kiro.dev/install script).
 RUN curl -fsSL -o /tmp/kiro-cli.deb \
         https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.deb \
+    && apt-get update \
     && apt-get install -y --no-install-recommends /tmp/kiro-cli.deb \
     && rm -f /tmp/kiro-cli.deb \
     && rm -rf /var/lib/apt/lists/*
