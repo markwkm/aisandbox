@@ -195,6 +195,25 @@ RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# PostgreSQL development packages (libpq and server headers, for
+# building client programs and extensions) from the PGDG apt
+# repository: Ubuntu 24.04 freezes PostgreSQL at 16, while PGDG
+# tracks current releases.  postgresql-common ships the official
+# repository setup script, which writes pgdg.sources using its
+# bundled signing key and runs apt-get update itself; -y skips
+# its confirmation prompt, and it sticks to apt-get throughout.
+# postgresql-server-dev-all covers every major version PGDG
+# still publishes (currently 10 through 18), so no version is
+# pinned here and new majors arrive with a rebuild.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        postgresql-common \
+    && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+    && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        postgresql-server-dev-all \
+    && rm -rf /var/lib/apt/lists/*
+
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
 # scope; the old @mariozechner packages are deprecated).
