@@ -183,7 +183,14 @@ RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
 # scope; the old @mariozechner packages are deprecated).
+#
+# --allow-scripts approves the install scripts these packages
+# and their dependencies run: npm 11 only warns about scripts
+# not covered by allowScripts, but npm 12 will refuse to run
+# them, and "npm approve-scripts" cannot cover global installs.
+# The flag is a single argument and cannot be wrapped.
 RUN npm install -g \
+        --allow-scripts=@anthropic-ai/claude-code,@google/genai,opencode-ai,openclaw,protobufjs,tree-sitter-bash \
         @anthropic-ai/claude-code \
         @earendil-works/pi-coding-agent \
         opencode-ai \
@@ -205,11 +212,14 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
 
 # Linters and formatters distributed via npm: JavaScript, CSS,
 # HTML, JSON, and Markdown linters, prettier, and the TypeScript
-# compiler (tsc).
+# compiler (tsc).  JSON linting uses the maintained
+# @prantlf/jsonlint fork (same jsonlint command): the original
+# jsonlint was last published in 2018 and pulls in the abandoned
+# nomnom package.
 RUN npm install -g \
+        @prantlf/jsonlint \
         eslint \
         htmlhint \
-        jsonlint \
         markdownlint-cli \
         prettier \
         stylelint \
