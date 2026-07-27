@@ -181,10 +181,11 @@ RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # npm-distributed agents: Claude Code, opencode, openclaw, and
-# Mario Zechner's pi.
+# Mario Zechner's pi (now published under the @earendil-works
+# scope; the old @mariozechner packages are deprecated).
 RUN npm install -g \
         @anthropic-ai/claude-code \
-        @mariozechner/pi-coding-agent \
+        @earendil-works/pi-coding-agent \
         opencode-ai \
         openclaw
 
