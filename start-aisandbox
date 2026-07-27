@@ -80,7 +80,8 @@ set -- -v "${SRC}:${SRC}" "$@"
 #   .claude                     Claude Code state and credentials
 #   .kiro                       Kiro global config (hardcoded path)
 #   .local/share/kiro-cli       Kiro CLI data
-#   .config/opencode            opencode config
+#   .opencode                   opencode config
+#   .config/opencode            more opencode config
 #   .local/share/opencode       opencode data (holds auth.json)
 #   .local/state/opencode       opencode state
 #   .cache/opencode             opencode cache
