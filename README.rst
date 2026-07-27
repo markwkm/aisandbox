@@ -105,7 +105,9 @@ Stop the sandbox when done::
 ``start-aisandbox`` mounts the following from the host, creating missing
 directories first:
 
-* ``~/.local/src`` read/write, and used as the working directory
+* the source directory (``~/.local/src`` by default, overridable with a
+  command-line argument or ``AISANDBOX_SRC``) read/write, and used as
+  the working directory
 * per-agent configuration, cache, and state directories (``~/.claude`` and
   ``~/.claude.json``, ``~/.kiro``, ``~/.config/opencode``, ``~/.openclaw``,
   ``~/.config/goose``, ``~/.pi``, ``~/.aider``, and friends), so logins and
@@ -124,6 +126,15 @@ environment.
 To run a different image tag::
 
     AISANDBOX_IMAGE=localhost/aisandbox:test ./start-aisandbox
+
+To mount a different source directory, pass it as an argument or set
+``AISANDBOX_SRC`` (the argument takes precedence)::
+
+    ./start-aisandbox "${HOME}/src"
+    AISANDBOX_SRC="${HOME}/src" ./start-aisandbox
+
+The source directory is mounted at the same absolute path inside the
+container so per-project agent state stays resumable on both sides.
 
 Notes
 =====

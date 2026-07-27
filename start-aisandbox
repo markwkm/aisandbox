@@ -3,15 +3,22 @@
 # the background, preferring podman and falling back to docker.
 # Open a shell inside it with shell-aisandbox.
 #
-# Mounts ~/.local/src read/write, plus the per-tool config, cache,
-# and state directories of the AI CLIs baked into the image, so
-# logins and history persist across container runs.
+# Mounts the source directory (default ~/.local/src) read/write,
+# plus the per-tool config, cache, and state directories of the AI
+# CLIs baked into the image, so logins and history persist across
+# container runs.
 #
-# Usage: start-aisandbox
+# Usage: start-aisandbox [source-dir]
+#
+# The optional source-dir argument takes precedence over
+# AISANDBOX_SRC.
 #
 # Environment:
 #   AISANDBOX_IMAGE  image to run (default: aisandbox)
 #   AISANDBOX_NAME   container name (default: aisandbox)
+#   AISANDBOX_SRC    source directory mounted read/write and used
+#                    as the working directory
+#                    (default: ~/.local/src)
 #
 # Stop with stop-aisandbox; the container is removed
 # automatically when stopped.
@@ -20,6 +27,15 @@ set -eu
 
 IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
 NAME="${AISANDBOX_NAME:-aisandbox}"
+SRC="${1:-${AISANDBOX_SRC:-${HOME}/.local/src}}"
+
+# Container engines require absolute paths in -v mounts, so
+# resolve a relative source-dir argument against the current
+# directory.
+case "${SRC}" in
+    /*) ;;
+    *) SRC="$(pwd)/${SRC}" ;;
+esac
 
 if command -v podman >/dev/null 2>&1; then
     ENGINE="podman"
@@ -48,11 +64,17 @@ CHOME="${HOME}"
 # the image and its idle command at the end.
 set -- "${IMAGE}" sleep infinity
 
+# Source tree, mounted read/write at the same absolute path on
+# both sides (even when AISANDBOX_SRC points outside the home
+# directory) so per-project agent state keyed on absolute paths
+# matches on host and in the sandbox.
+mkdir -p "${SRC}"
+set -- -v "${SRC}:${SRC}" "$@"
+
 # Host directories mounted read/write at the same relative
 # location under the container user's home.  mkdir first so a
 # missing directory is not created root-owned by the engine.
 #
-#   .local/src                  source trees (requested)
 #   .aws                        AWS config, credentials, and SSO
 #                               token cache (Kiro/Bedrock)
 #   .claude                     Claude Code state and credentials
@@ -68,7 +90,6 @@ set -- "${IMAGE}" sleep infinity
 #   .pi                         pi agent settings and sessions
 #   .aider                      aider caches and analytics
 for d in \
-    .local/src \
     .aws \
     .claude \
     .kiro \
@@ -150,7 +171,7 @@ fi
 # "stop" is immediate instead of waiting out a 10 s timeout
 # before SIGKILLing the idle sleep.
 set -- run -d --rm --init --name "${NAME}" --hostname aisandbox \
-    --network host -w "${CHOME}/.local/src" "$@"
+    --network host -w "${SRC}" "$@"
 
 "${ENGINE}" "$@" >/dev/null
 echo "container '${NAME}' started;" \
