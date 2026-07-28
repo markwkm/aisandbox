@@ -1,9 +1,8 @@
 # AI CLI sandbox on Ubuntu 24.04 LTS.
 #
 # Ubuntu was chosen because it is the distro all of these tools
-# support out of the box: Kiro ships an Ubuntu .deb, NodeSource
-# covers the npm-installed agents, and the goose and aider install
-# scripts target Debian/Ubuntu first.
+# support out of the box: Kiro ships an Ubuntu .deb, and the
+# goose and aider install scripts target Debian/Ubuntu first.
 #
 # Agents installed (command names in parentheses):
 #   Claude Code (claude), Kiro CLI (kiro-cli), opencode, openclaw,
@@ -153,23 +152,31 @@ RUN apt-get update \
         /usr/local/bin/perf
 
 # Node.js 24 (openclaw requires >= 22.22.3; 24.x covers all the
-# npm-installed agents), from NodeSource's repository.  The
-# repository is set up manually instead of running their
-# setup_24.x script: that script drives the plain "apt" command,
-# which warns that it has no stable CLI interface; the steps
-# here stick to apt-get, the stable scripting interface.
-RUN key=/etc/apt/keyrings/nodesource.gpg \
-    && mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL \
-        https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | gpg --dearmor -o "${key}" \
-    && chmod a+r "${key}" \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
-        "https://deb.nodesource.com/node_24.x nodistro main" \
-        > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# npm-installed agents), from the official nodejs.org binary
+# tarball, unpacked into /usr/local; it ships node, npm, npx,
+# and corepack.  NodeSource's apt repository, used previously,
+# sits behind a Cloudflare challenge that answers plain HTTP
+# clients with 403 (nodesource/distributions issue #1844), which
+# broke builds.  The tarball name embeds the version, so resolve
+# it from the SHASUMS256.txt in the latest-v24.x directory and
+# verify the download against that same file, like the
+# golangci-lint step below.
+RUN case "$(uname -m)" in \
+        x86_64) arch=x64 ;; \
+        aarch64) arch=arm64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && curl -fsSL -O \
+        https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt \
+    && f=$(awk -v a="${arch}" \
+        '$2 ~ "^node-v.*-linux-" a "\\.tar\\.xz$" { print $2 }' \
+        SHASUMS256.txt) \
+    && curl -fsSL -O "https://nodejs.org/dist/latest-v24.x/${f}" \
+    && awk -v f="${f}" '$2 == f' SHASUMS256.txt | sha256sum -c - \
+    && tar -xJf "${f}" -C /usr/local --strip-components=1 \
+    && rm -f "${f}" SHASUMS256.txt /usr/local/CHANGELOG.md \
+        /usr/local/LICENSE /usr/local/README.md
 
 # Kiro CLI from the official Ubuntu package (installs system-wide,
 # unlike the per-user https://cli.kiro.dev/install script).
@@ -333,8 +340,9 @@ RUN curl -fsSL -o /usr/local/bin/yq \
 
 # ast-grep (structural code search and rewriting).  Not
 # installed from its @ast-grep/cli npm package: that package
-# also links an "sg" alias, which collides with /usr/bin/sg
-# (setgroups, from the shadow suite) under npm's /usr prefix.
+# also links an "sg" alias, which would shadow /usr/bin/sg
+# (setgroups, from the shadow suite) from npm's /usr/local
+# prefix.
 # Extract only the ast-grep binary from the release zip; amd64,
 # like the hadolint step above.
 RUN cd /tmp \
