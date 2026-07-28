@@ -33,7 +33,7 @@ Files
     Starts the sandbox container detached in the background with the
     appropriate mounts and environment.
 
-``shell-aisandbox``
+``open-shell``
     Opens an interactive shell, or runs a command, in the running sandbox
     container.
 
@@ -92,11 +92,16 @@ It prefers podman and falls back to docker, and leaves a container named
 (the host's login shell, as an unprivileged container user named after the
 invoking host user)::
 
-    ./shell-aisandbox
+    ./open-shell
 
 Any arguments are run instead of the shell::
 
-    ./shell-aisandbox claude --version
+    ./open-shell claude --version
+
+The ``-r`` option runs as root inside the container instead, e.g. to
+install extra packages::
+
+    ./open-shell -r apt-get install -y strace
 
 Stop the sandbox when done::
 

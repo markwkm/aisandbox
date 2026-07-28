@@ -1,9 +1,13 @@
 #!/bin/sh
 # Open an interactive shell, or run a command, in the aisandbox
-# container started by run-aisandbox.
+# container started by start-aisandbox.
 #
-# Usage: shell-aisandbox [command [args ...]]
+# Usage: open-shell [-r] [command [args ...]]
 #   With no arguments an interactive login shell is started.
+#
+# Options:
+#   -r  run as root inside the container instead of the
+#       unprivileged user
 #
 # Environment:
 #   AISANDBOX_NAME  container name (default: aisandbox)
@@ -11,6 +15,18 @@
 set -eu
 
 NAME="${AISANDBOX_NAME:-aisandbox}"
+
+ASUSER=""
+while getopts r opt; do
+    case "${opt}" in
+        r) ASUSER="--user root" ;;
+        *)
+            echo "usage: open-shell [-r] [command [args ...]]" >&2
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 if command -v podman >/dev/null 2>&1; then
     ENGINE="podman"
@@ -38,8 +54,9 @@ if [ $# -eq 0 ]; then
 fi
 
 # Allocate a tty only when we actually have one, so commands can
-# also be run from pipes and scripts.
+# also be run from pipes and scripts.  ${ASUSER} is expanded
+# unquoted on purpose: it is either empty or "--user root".
 if [ -t 0 ]; then
-    exec "${ENGINE}" exec -it "${NAME}" "$@"
+    exec "${ENGINE}" exec ${ASUSER} -it "${NAME}" "$@"
 fi
-exec "${ENGINE}" exec -i "${NAME}" "$@"
+exec "${ENGINE}" exec ${ASUSER} -i "${NAME}" "$@"

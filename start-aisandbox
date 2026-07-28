@@ -1,7 +1,7 @@
 #!/bin/sh
 # Start the aisandbox container (see Containerfile) detached in
 # the background, preferring podman and falling back to docker.
-# Open a shell inside it with shell-aisandbox.
+# Open a shell inside it with open-shell.
 #
 # Mounts the source directory (default ~/.local/src) read/write,
 # plus the per-tool config, cache, and state directories of the AI
@@ -176,4 +176,4 @@ set -- run -d --rm --init --name "${NAME}" --hostname aisandbox \
 
 "${ENGINE}" "$@" >/dev/null
 echo "container '${NAME}' started;" \
-    "open a shell with shell-aisandbox"
+    "open a shell with open-shell"
