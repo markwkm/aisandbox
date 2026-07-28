@@ -212,6 +212,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq-dev \
         postgresql-server-dev-all \
+        postgresql-18 \
     && rm -rf /var/lib/apt/lists/*
 
 # npm-distributed agents: Claude Code, opencode, openclaw, and
