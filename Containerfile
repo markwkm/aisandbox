@@ -55,6 +55,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   (MySQL C API headers and mysql_config, for building client
 #   programs; PostgreSQL's and Oracle's equivalents come from
 #   PGDG and Oracle Instant Client in later layers);
+# - libev-dev: libev event-loop library headers, for building
+#   programs that use it;
 # - everyday utilities the agents expect to find: file, git-lfs,
 #   moreutils (sponge), rsync, sqlite3, dos2unix, and zstd;
 # - shunit2 shell-script unit-test framework.
@@ -105,6 +107,7 @@ RUN apt-get update \
         jq \
         less \
         libdbus-1-3 \
+        libev-dev \
         libmysqlclient-dev \
         libperl-critic-perl \
         libxcb1 \
