@@ -266,6 +266,22 @@ RUN apt-get update \
         > /etc/ld.so.conf.d/oracle-instantclient.conf \
     && ldconfig
 
+# MySQL server from Ubuntu's repositories: unlike PostgreSQL,
+# Ubuntu keeps MySQL patched (8.0.x), so no third-party
+# repository is needed.  A separate layer rather than an
+# addition to the first one so the toolchain layer's build
+# cache survives.  As with collectd, there is no init system
+# here, and the package's /var/lib/mysql is not writable by the
+# container user, so initialize a data directory in ${HOME} and
+# run the server in the foreground:
+#   mysqld --initialize-insecure --datadir="${HOME}/mysql"
+#   mysqld --datadir="${HOME}/mysql" \
+#       --socket="${HOME}/mysql/mysql.sock"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        mysql-server-8.0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
 # scope; the old @mariozechner packages are deprecated).
