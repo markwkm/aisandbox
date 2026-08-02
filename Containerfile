@@ -51,6 +51,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   and imagemagick;
 # - benchmarking and code statistics: hyperfine and cloc, plus
 #   entr to watch files and rerun commands;
+# - database client development files: libmysqlclient-dev
+#   (MySQL C API headers and mysql_config, for building client
+#   programs; PostgreSQL's and Oracle's equivalents come from
+#   PGDG and Oracle Instant Client in later layers);
 # - everyday utilities the agents expect to find: file, git-lfs,
 #   moreutils (sponge), rsync, sqlite3, dos2unix, and zstd;
 # - shunit2 shell-script unit-test framework.
@@ -101,6 +105,7 @@ RUN apt-get update \
         jq \
         less \
         libdbus-1-3 \
+        libmysqlclient-dev \
         libperl-critic-perl \
         libxcb1 \
         libxml2-utils \
@@ -221,6 +226,45 @@ RUN apt-get update \
         postgresql-server-dev-all \
         postgresql-18 \
     && rm -rf /var/lib/apt/lists/*
+
+# Oracle Instant Client, Basic Light and SDK packages: OCI
+# client libraries and headers, completing the database client
+# development files from the first layer.  Downloaded from
+# Oracle's permanent latest-version links under the Oracle Free
+# Distribution, Hosting, and Use Terms and Conditions (the
+# *_LICENSE files land in the install directory); amd64 zips,
+# like the Kiro CLI step above (Oracle publishes arm64 zips
+# only under version-numbered URLs).  Basic Light carries
+# English-only error messages and Unicode character sets; swap
+# "basiclite" for "basic" if full NLS support is ever needed.
+# The zips unpack into a version-named directory
+# (instantclient_23_26 today); the unversioned
+# /opt/oracle/instantclient symlink gives compiler flags a
+# stable path (headers in sdk/include), and the ld.so.conf.d
+# entry makes the libraries visible system-wide.  Ubuntu
+# 24.04's 64-bit time_t transition renamed libaio's soname to
+# libaio.so.1t64, while libclntsh needs libaio.so.1, hence the
+# compatibility symlink.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libaio1t64 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s libaio.so.1t64 \
+        /usr/lib/x86_64-linux-gnu/libaio.so.1 \
+    && u="https://download.oracle.com/otn_software/linux/instantclient" \
+    && mkdir -p /opt/oracle \
+    && cd /tmp \
+    && for f in instantclient-basiclite-linuxx64.zip \
+            instantclient-sdk-linuxx64.zip; do \
+        curl -fsSL -O "${u}/${f}" \
+        && unzip -oq "${f}" -d /opt/oracle \
+        && rm -f "${f}" \
+        || exit 1; \
+    done \
+    && rm -rf /opt/oracle/META-INF \
+    && ln -s /opt/oracle/instantclient_* /opt/oracle/instantclient \
+    && echo /opt/oracle/instantclient \
+        > /etc/ld.so.conf.d/oracle-instantclient.conf \
+    && ldconfig
 
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
