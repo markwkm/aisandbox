@@ -548,6 +548,30 @@ RUN k1=/etc/apt/keyrings/opentofu.gpg \
     && apt-get install -y --no-install-recommends tofu \
     && rm -rf /var/lib/apt/lists/*
 
+# Ansible from the ansible/ansible PPA, the repository the
+# official install guide points Ubuntu users at: Ubuntu 24.04
+# freezes ansible at 9.2 (ansible-core 2.16), while the PPA
+# tracks current releases (the packages are Architecture: all,
+# so every architecture is covered).  Launchpad serves PPA
+# signing keys through keyserver.ubuntu.com, ASCII-armored,
+# hence the gpg --dearmor step like the Terraform one above;
+# the fingerprint is the PPA's signing_key_fingerprint from the
+# Launchpad API.  The "ansible" package pulls in ansible-core
+# and adds the community collections.
+RUN key=/etc/apt/keyrings/ansible-archive-keyring.gpg \
+    && fpr=6125E2A8C77F2818FB7BD15B93C4A3FD7BB9C367 \
+    && curl -fsSL \
+        "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${fpr}" \
+    | gpg --dearmor -o "${key}" \
+    && chmod a+r "${key}" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
+        "https://ppa.launchpadcontent.net/ansible/ansible/ubuntu" \
+        "noble main" \
+        > /etc/apt/sources.list.d/ansible.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ansible \
+    && rm -rf /var/lib/apt/lists/*
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
