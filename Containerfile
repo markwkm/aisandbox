@@ -460,6 +460,31 @@ RUN curl -fsSL https://sh.rustup.rs \
 ENV RUSTUP_HOME=/opt/rust \
     PATH=/opt/rust/bin:${PATH}
 
+# Julia from the official julialang.org binary tarball, which
+# unpacks into a version-named directory under /opt; the
+# symlink puts the julia command on the PATH.  Verified against
+# the release's published checksum file, like the Node.js step
+# above; pinned because the URLs embed the version (the
+# directory component is the major.minor prefix).  Bump the
+# pinned version here to update.
+RUN v="1.12.6" \
+    && case "$(uname -m)" in \
+        x86_64) arch=x64 ;; \
+        aarch64) arch=aarch64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && f="julia-${v}-linux-$(uname -m).tar.gz" \
+    && cd /tmp \
+    && curl -fsSL -O \
+        "https://julialang-s3.julialang.org/bin/linux/${arch}/${v%.*}/${f}" \
+    && curl -fsSL \
+        "https://julialang-s3.julialang.org/bin/checksums/julia-${v}.sha256" \
+        | awk -v f="${f}" '$2 == f' \
+        | sha256sum -c - \
+    && tar -xzf "${f}" -C /opt \
+    && rm -f "${f}" \
+    && ln -s "/opt/julia-${v}/bin/julia" /usr/local/bin/julia
+
 # Generate the en_US.UTF-8 locale.  The locales package is
 # already present (postgresql-18 depends on it) but ships with
 # every locale commented out in /etc/locale.gen, so the image
