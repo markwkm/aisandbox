@@ -528,6 +528,26 @@ RUN key=/etc/apt/keyrings/hashicorp-archive-keyring.gpg \
     && apt-get install -y --no-install-recommends terraform \
     && rm -rf /var/lib/apt/lists/*
 
+# OpenTofu (tofu), the open-source Terraform fork, from its
+# packagecloud apt repository, following the project's own
+# install documentation: the repository is signed with two keys
+# (the OpenTofu project key, distributed in binary form, and
+# the packagecloud repository key, ASCII-armored), so both are
+# installed and listed in signed-by.  The "any" suite serves
+# every deb-based distribution.
+RUN k1=/etc/apt/keyrings/opentofu.gpg \
+    && k2=/etc/apt/keyrings/opentofu-repo.gpg \
+    && curl -fsSL -o "${k1}" https://get.opentofu.org/opentofu.gpg \
+    && curl -fsSL https://packages.opentofu.org/opentofu/tofu/gpgkey \
+        | gpg --dearmor -o "${k2}" \
+    && chmod a+r "${k1}" "${k2}" \
+    && echo "deb [signed-by=${k1},${k2}]" \
+        "https://packages.opentofu.org/opentofu/tofu/any/ any main" \
+        > /etc/apt/sources.list.d/opentofu.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends tofu \
+    && rm -rf /var/lib/apt/lists/*
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
