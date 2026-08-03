@@ -510,6 +510,24 @@ RUN cd /tmp \
     && ./aws/install \
     && rm -rf "${f}" aws
 
+# Terraform from HashiCorp's apt repository, set up like the
+# GitHub CLI step above; the repository tracks current releases
+# and publishes both amd64 and arm64 packages.  HashiCorp
+# serves its signing key ASCII-armored, hence the gpg --dearmor
+# step (gnupg comes from the first layer).  Terraform is under
+# the Business Source License since 1.6; the OpenTofu step
+# below installs the open-source fork.
+RUN key=/etc/apt/keyrings/hashicorp-archive-keyring.gpg \
+    && curl -fsSL https://apt.releases.hashicorp.com/gpg \
+        | gpg --dearmor -o "${key}" \
+    && chmod a+r "${key}" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
+        "https://apt.releases.hashicorp.com noble main" \
+        > /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends terraform \
+    && rm -rf /var/lib/apt/lists/*
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
