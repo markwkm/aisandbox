@@ -572,6 +572,34 @@ RUN key=/etc/apt/keyrings/ansible-archive-keyring.gpg \
     && apt-get install -y --no-install-recommends ansible \
     && rm -rf /var/lib/apt/lists/*
 
+# Salt from the Salt Project apt repository (hosted on
+# Broadcom's Artifactory since 2024), following the project's
+# own install documentation: it publishes a ready-made deb822
+# salt.sources file whose Signed-By names the keyring path used
+# below, and serves the signing key ASCII-armored, which apt
+# accepts directly in a keyring file.  The "stable" suite
+# carries amd64 and arm64 onedir packages; no version is pinned
+# (the docs suggest an apt pin), so, as with PGDG, new releases
+# arrive with a rebuild.  salt-master and salt-minion install
+# their daemons; salt-ssh works agentless over SSH, and
+# salt-call --local (from salt-common) applies states
+# masterless.  As with collectd and MySQL above there is no
+# init system here, so run the daemons in the foreground:
+#   salt-master -l info
+#   salt-minion -l info
+RUN key=/etc/apt/keyrings/salt-archive-keyring.pgp \
+    && curl -fsSL -o "${key}" \
+        https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public \
+    && chmod a+r "${key}" \
+    && curl -fsSL -o /etc/apt/sources.list.d/salt.sources \
+        https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        salt-master \
+        salt-minion \
+        salt-ssh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
