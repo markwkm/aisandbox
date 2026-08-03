@@ -510,6 +510,24 @@ RUN cd /tmp \
     && ./aws/install \
     && rm -rf "${f}" aws
 
+# Session Manager plugin for the AWS CLI (session-manager-plugin,
+# needed by "aws ssm start-session"), from AWS's official .deb,
+# installed like the Kiro CLI step above.  The URL's directory
+# component names the architecture, so map uname -m to it like
+# the Node.js step above.
+RUN case "$(uname -m)" in \
+        x86_64) arch=ubuntu_64bit ;; \
+        aarch64) arch=ubuntu_arm64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/session-manager-plugin.deb \
+        "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/${arch}/session-manager-plugin.deb" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        /tmp/session-manager-plugin.deb \
+    && rm -f /tmp/session-manager-plugin.deb \
+    && rm -rf /var/lib/apt/lists/*
+
 # Terraform from HashiCorp's apt repository, set up like the
 # GitHub CLI step above; the repository tracks current releases
 # and publishes both amd64 and arm64 packages.  HashiCorp
