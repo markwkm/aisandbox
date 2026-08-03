@@ -497,6 +497,19 @@ RUN sed -i 's/^# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
         /etc/locale.gen \
     && locale-gen
 
+# AWS CLI v2 from the official installer zip, AWS's supported
+# distribution channel.  The zip name embeds the architecture
+# exactly as uname -m reports it (x86_64, aarch64), so both
+# amd64 and arm64 work without a case statement.  The installer
+# places the tools under /usr/local/aws-cli and links aws and
+# aws_completer into /usr/local/bin.
+RUN cd /tmp \
+    && f="awscli-exe-linux-$(uname -m).zip" \
+    && curl -fsSL -O "https://awscli.amazonaws.com/${f}" \
+    && unzip -q "${f}" \
+    && ./aws/install \
+    && rm -rf "${f}" aws
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
