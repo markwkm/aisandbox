@@ -427,6 +427,18 @@ RUN curl -fsSL https://sh.rustup.rs \
 ENV RUSTUP_HOME=/opt/rust \
     PATH=/opt/rust/bin:${PATH}
 
+# Generate the en_US.UTF-8 locale.  The locales package is
+# already present (postgresql-18 depends on it) but ships with
+# every locale commented out in /etc/locale.gen, so the image
+# only has the C/POSIX/C.utf8 locales built into glibc; tools
+# such as PostgreSQL's initdb and CREATE DATABASE expect
+# en_US.UTF-8 to exist.  A separate layer near the end, like
+# the MySQL one above, so the earlier layers' build caches
+# survive.
+RUN sed -i 's/^# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
+        /etc/locale.gen \
+    && locale-gen
+
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user.  Claude Code and other agents key per-project state
 # on absolute paths, so /home/<user> must match the host for
