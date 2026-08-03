@@ -300,6 +300,24 @@ RUN apt-get update \
         unixodbc-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# R from CRAN's apt repository, set up like the GitHub CLI step
+# above: Ubuntu 24.04 freezes R at 4.3.3, while CRAN tracks
+# current releases (and publishes both amd64 and arm64
+# packages).  r-base-dev brings the headers and toolchain that
+# install.packages() needs to build packages from source.
+RUN key=/etc/apt/keyrings/cran-archive-keyring.asc \
+    && curl -fsSL -o "${key}" \
+        https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+    && chmod a+r "${key}" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
+        "https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
+        > /etc/apt/sources.list.d/cran.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        r-base \
+        r-base-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
 # scope; the old @mariozechner packages are deprecated).
