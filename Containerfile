@@ -285,6 +285,21 @@ RUN apt-get update \
         mysql-server-8.0 \
     && rm -rf /var/lib/apt/lists/*
 
+# unixODBC, completing the database client development files
+# from the earlier layers: unixodbc-dev carries the ODBC API
+# headers (sql.h and friends), libraries, and pkg-config files
+# for building ODBC client programs, while unixodbc (isql,
+# iusql) and odbcinst supply the command-line tools for testing
+# connections and registering drivers.  A separate layer, like
+# the MySQL one above, so the earlier layers' build caches
+# survive.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        odbcinst \
+        unixodbc \
+        unixodbc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # npm-distributed agents: Claude Code, opencode, openclaw, and
 # Mario Zechner's pi (now published under the @earendil-works
 # scope; the old @mariozechner packages are deprecated).
