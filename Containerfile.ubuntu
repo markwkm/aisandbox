@@ -40,6 +40,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   shfmt), YAML (yamllint), Lua (lua-check), Perl
 #   (libperl-critic-perl), XML (libxml2-utils), HTML (tidy), and
 #   spelling (codespell);
+# - clangd: the C/C++ language server, for LSP-based code
+#   navigation and diagnostics;
 # - documentation toolchain: python3-docutils (rst2html and the
 #   other rst2* tools), sphinx, and everything the PostgreSQL
 #   documentation build requires (docbook-xml, docbook-xsl,
@@ -81,6 +83,7 @@ RUN apt-get update \
         ca-certificates \
         clang-format \
         clang-tidy \
+        clangd \
         cloc \
         cmake \
         codespell \

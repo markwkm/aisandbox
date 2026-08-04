@@ -87,6 +87,10 @@ USER root
 #
 # Notes relative to the Ubuntu package set:
 #
+# - clang-tools-extra carries clangd (the C/C++ language
+#   server) together with clang-tidy and clang-format, which
+#   Ubuntu packages separately (dnf resolves the package from
+#   the llvm-toolset module's default stream on its own);
 # - sqlite provides the sqlite3 command;
 # - fd-find installs /usr/bin/fd directly (no fdfind rename);
 # - perf is the real binary (no kernel-version wrapper);
@@ -121,6 +125,7 @@ RUN : > /etc/yum/vars/ociregion \
         bison \
         bzip2 \
         ca-certificates \
+        clang-tools-extra \
         cloc \
         cmake \
         collectd \
