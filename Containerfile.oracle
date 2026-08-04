@@ -241,20 +241,25 @@ RUN dnf -y --setopt=install_weak_deps=False install \
 # ol8_codeready_builder supplies development dependencies.
 # PGDG yum has no equivalent of apt's
 # postgresql-server-dev-all, so the newest major is pinned
-# here; bump the pinned version to update, in the ENV line
-# below too: the packages install under /usr/pgsql-18/bin
-# (psql, pg_config, initdb), which the PATH addition makes
-# reachable without version-specific paths.
+# here; bump the pinned version to update, in the ENV lines
+# below too: the packages install under /usr/pgsql-18 (psql,
+# pg_config, and initdb in bin, libpq.pc in lib/pkgconfig),
+# which the PATH and PKG_CONFIG_PATH additions make reachable
+# without version-specific paths.  libcurl-devel satisfies the
+# libcurl requirement PostgreSQL 18's libpq.pc declares, without
+# which pkg-config cannot resolve libpq's flags.
 RUN v="18" \
     && dnf -y install \
         "https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm" \
     && dnf -qy module disable postgresql \
     && dnf -y --setopt=install_weak_deps=False \
         --enablerepo ol8_codeready_builder install \
+        libcurl-devel \
         "postgresql${v}-devel" \
         "postgresql${v}-server" \
     && dnf clean all
-ENV PATH=${PATH}:/usr/pgsql-18/bin
+ENV PATH=${PATH}:/usr/pgsql-18/bin \
+    PKG_CONFIG_PATH=/usr/pgsql-18/lib/pkgconfig
 
 # Node.js 24, from the official nodejs.org binary tarball as in
 # Containerfile.ubuntu.  nodejs.org builds its Linux binaries
