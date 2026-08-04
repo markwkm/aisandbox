@@ -57,7 +57,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # - database client development files: libmysqlclient-dev
 #   (MySQL C API headers and mysql_config, for building client
 #   programs; PostgreSQL's and Oracle's equivalents come from
-#   PGDG and Oracle Instant Client in later layers);
+#   PGDG and Oracle Instant Client in later layers) and
+#   libsqlite3-dev (SQLite C API headers and library);
 # - libev-dev: libev event-loop library headers, for building
 #   programs that use it;
 # - everyday utilities the agents expect to find: file, git-lfs,
@@ -113,6 +114,7 @@ RUN apt-get update \
         libev-dev \
         libmysqlclient-dev \
         libperl-critic-perl \
+        libsqlite3-dev \
         libxcb1 \
         libxml2-utils \
         linux-tools-generic \
