@@ -2,15 +2,14 @@
 #
 # A variant of Containerfile.ubuntu built on Oracle's official
 # Oracle Database Free image (currently 26ai; Oracle Free Use
-# Terms and Conditions license), which creates the database on
-# first boot and ships a healthcheck.  The regular image is
-# used instead of the -lite variant so the full ORACLE_HOME is
+# Terms and Conditions license).  The regular image is used
+# instead of the -lite variant so the full ORACLE_HOME is
 # present: the OCI header files in
-# ${ORACLE_HOME}/rdbms/public, libclntsh, sqlplus, and sqlldr,
-# so no Instant Client is needed.  The image's latest tag is
-# Oracle Linux 8 based on both amd64 and arm64 (the installed
-# RPM is an el8 package), which determines the package set
-# below.
+# ${ORACLE_HOME}/rdbms/public, libclntsh, sqlplus, sqlldr, and
+# the dbca seed template, so no Instant Client is needed.  The
+# image's latest tag is Oracle Linux 8 based on both amd64 and
+# arm64 (the installed RPM is an el8 package), which determines
+# the package set below.
 #
 # Agents installed (command names in parentheses):
 #   Claude Code (claude), opencode, openclaw, goose, pi, aider
@@ -53,25 +52,24 @@
 # which also names the container aisandbox-oracle, so it can
 # run alongside the default ubuntu sandbox.
 #
-# The ENTRYPOINT set at the end of this file starts the
-# database no matter what command the run command appends (the
-# base image only sets a CMD, which start-aisandbox's idle
-# command would otherwise replace).  The first boot takes a few
-# minutes to create the database; wait for "DATABASE IS READY
-# TO USE!" in the container logs or for the inherited
-# healthcheck to pass, then connect to //localhost:1521/FREEPDB1
-# as system with the ORACLE_PWD set below.  start-aisandbox
-# runs every flavor on the host network, so the listener also
-# binds port 1521 on the host.  The database runs
-# as the image's oracle user (uid 54321), so the entrypoint
-# must, too; agent work happens as the unprivileged uid-1000
-# user created near the end of this file, which open-shell
-# selects by default for this flavor ("open-shell oracle -u
-# oracle" reaches the database user):
+# The database is not started: start-aisandbox's idle command
+# replaces the base image's CMD.  The base image ships the FREE
+# database already created but stopped, and whatever needs a
+# database starts it (or recreates it) with the software home's
+# tools as the oracle user (uid 54321; DBT-2's oracle
+# integration test does exactly that and leaves the database
+# running for later runs).  The oracle account's
+# password is "oracle", set by the base image.  Agent work
+# happens as the unprivileged uid-1000 user created near the
+# end of this file, which open-shell selects by default for
+# this flavor ("open-shell oracle -u oracle" reaches the
+# database user):
 #
 #   ./open-shell oracle
 #
-# Database data lives in /opt/oracle/oradata and is not
+# start-aisandbox runs every flavor on the host network, so a
+# listener started in the container binds port 1521 on the
+# host.  Database data lives in /opt/oracle/oradata and is not
 # persisted across container removal.
 
 FROM container-registry.oracle.com/database/free:latest
@@ -225,9 +223,14 @@ RUN echo "${ORACLE_HOME}/lib" \
 #   mysqld --initialize-insecure --datadir="${HOME}/mysql"
 #   mysqld --datadir="${HOME}/mysql" \
 #       --socket="${HOME}/mysql/mysql.sock"
+# The RPM stamps the cap_sys_nice file capability on the mysqld
+# binary, and rootless podman's overlay refuses to execute a
+# binary carrying that xattr (EPERM, even as root), so strip
+# it.
 RUN dnf -y --setopt=install_weak_deps=False install \
         mysql-devel \
         mysql-server \
+    && setcap -r /usr/libexec/mysqld \
     && dnf clean all
 
 # PostgreSQL client, server, and development packages from the
@@ -560,18 +563,7 @@ RUN useradd -m -u 1000 -s "${USERSHELL}" "${USERNAME}" \
 # Updating inside a container makes no sense; pin what was built.
 ENV DISABLE_AUTOUPDATER=1
 
-# SYS/SYSTEM password for the first-boot database creation (the
-# base image otherwise generates a random one and prints it in
-# the container log).
-ENV ORACLE_PWD=oracle
-
-# The base image starts the database from a CMD, which any
-# command given to the run command (such as start-aisandbox's
-# idle "sleep infinity") would replace, leaving the database
-# down.  Promote it to an ENTRYPOINT instead: declaring an
-# ENTRYPOINT here resets the inherited CMD, and any appended
-# command becomes unused arguments of the -c script, so the
-# database starts no matter how the container is run.  The
-# script must run as the oracle user, hence USER oracle.
+# The base image's CMD would start the database; start-aisandbox's
+# idle command replaces it, so nothing starts the database and
+# whatever needs one starts it itself (see the header comment).
 USER oracle
-ENTRYPOINT ["/bin/bash", "-c", "exec ${ORACLE_BASE}/${RUN_FILE}"]
