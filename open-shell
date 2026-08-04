@@ -2,26 +2,61 @@
 # Open an interactive shell, or run a command, in the aisandbox
 # container started by start-aisandbox.
 #
-# Usage: open-shell [-r] [command [args ...]]
+# Usage: open-shell [flavor] [-r | -u user] [command [args ...]]
 #   With no arguments an interactive login shell is started.
 #
+# A first argument naming a Containerfile flavor next to this
+# script selects which flavor's container to use, like
+# start-aisandbox (e.g. "open-shell oracle"); it takes
+# precedence over AISANDBOX_FLAVOR.  Everything after the
+# options is the command to run.
+#
 # Options:
-#   -r  run as root inside the container instead of the
-#       unprivileged user
+#   -r       run as root inside the container
+#   -u user  run as the given container user (e.g. -u oracle
+#            for the Oracle variant's database user)
+#
+# Shells default to the uid-1000 agent user every flavor's
+# image builds: the ubuntu image's default user already is it,
+# while the other flavors' images default to a service user
+# (the oracle image's must stay oracle so its entrypoint can
+# start the database), so the exec selects uid 1000 there
+# explicitly.
 #
 # Environment:
-#   AISANDBOX_NAME  container name (default: aisandbox)
+#   AISANDBOX_FLAVOR  Containerfile variant whose container to
+#                     use (default: ubuntu)
+#   AISANDBOX_NAME    container name (default: aisandbox for
+#                     the ubuntu flavor, aisandbox-<flavor> for
+#                     the others)
 
 set -eu
 
-NAME="${AISANDBOX_NAME:-aisandbox}"
+FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
+if [ $# -ge 1 ] && [ -f "$(dirname "$0")/Containerfile.${1}" ]; then
+    FLAVOR="$1"
+    shift
+fi
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    NAME="${AISANDBOX_NAME:-aisandbox}"
+else
+    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
+fi
 
-ASUSER=""
-while getopts r opt; do
+# The uid-1000 default (see above) is numeric so it works no
+# matter which host user's name the image was built with.
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    ASUSER=""
+else
+    ASUSER="--user 1000"
+fi
+while getopts ru: opt; do
     case "${opt}" in
         r) ASUSER="--user root" ;;
+        u) ASUSER="--user ${OPTARG}" ;;
         *)
-            echo "usage: open-shell [-r] [command [args ...]]" >&2
+            echo "usage: open-shell [flavor] [-r | -u user]" \
+                "[command [args ...]]" >&2
             exit 1
             ;;
     esac

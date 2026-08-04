@@ -14,7 +14,10 @@
 #
 #   podman build --build-arg USERNAME="$(id -un)" \
 #       --build-arg USERSHELL="${SHELL}" \
-#       -t aisandbox -f Containerfile .
+#       -t aisandbox -f Containerfile.ubuntu .
+#
+# Containerfile.oracle is a variant of this image that also runs
+# Oracle Database Free; see its header for the differences.
 #
 # Start with the start-aisandbox script.
 #

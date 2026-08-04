@@ -1,21 +1,36 @@
 #!/bin/sh
-# Update the aisandbox image: rebuild it from scratch so the base
+# Update an aisandbox image: rebuild it from scratch so the base
 # image, OS packages, and all agents come in at their current
 # versions, then remove the image it replaces.
 #
 # A running container keeps using the old image; restart it with
 # stop-aisandbox and start-aisandbox to pick up the update.
 #
-# Usage: update-aisandbox
+# Usage: update-aisandbox [flavor]
+#
+# The optional flavor argument selects which Containerfile to
+# build: Containerfile.<flavor>, e.g. "ubuntu" (the default) or
+# "oracle".  It takes precedence over AISANDBOX_FLAVOR.
 #
 # Environment:
-#   AISANDBOX_IMAGE  image to build (default: aisandbox)
-#   AISANDBOX_NAME   container name (default: aisandbox)
+#   AISANDBOX_FLAVOR  Containerfile variant to build
+#                     (default: ubuntu)
+#   AISANDBOX_IMAGE   image to build (default: aisandbox for the
+#                     ubuntu flavor, aisandbox-<flavor> for the
+#                     others)
+#   AISANDBOX_NAME    container name (default: same as the
+#                     image default)
 
 set -eu
 
-IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
-NAME="${AISANDBOX_NAME:-aisandbox}"
+FLAVOR="${1:-${AISANDBOX_FLAVOR:-ubuntu}}"
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
+    NAME="${AISANDBOX_NAME:-aisandbox}"
+else
+    IMAGE="${AISANDBOX_IMAGE:-aisandbox-${FLAVOR}}"
+    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
+fi
 
 if command -v podman >/dev/null 2>&1; then
     ENGINE="podman"
@@ -26,10 +41,12 @@ else
     exit 1
 fi
 
-# The Containerfile lives next to this script.
+# The Containerfiles live next to this script.
+CONTAINERFILE="Containerfile.${FLAVOR}"
 cd "$(dirname "$0")"
-if [ ! -f Containerfile ]; then
-    echo "error: no Containerfile in $(pwd)" >&2
+if [ ! -f "${CONTAINERFILE}" ]; then
+    echo "error: no ${CONTAINERFILE} in $(pwd); available:" \
+        Containerfile.* >&2
     exit 1
 fi
 
@@ -39,12 +56,23 @@ old_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
 # --pull refreshes the base image; --no-cache forces every step
 # to re-run so apt and the agent installers actually fetch
 # current versions instead of reusing cached layers.
+#
+# podman defaults to the OCI image format, which discards any
+# HEALTHCHECK (the oracle flavor inherits one from its base
+# image), so ask for the docker format there; docker always
+# uses it and has no such flag.
+FORMAT=""
+if [ "${ENGINE}" = "podman" ]; then
+    FORMAT="--format docker"
+fi
 echo "rebuilding '${IMAGE}' without cache;" \
     "this can take half an hour"
-"${ENGINE}" build --pull --no-cache \
+# ${FORMAT} is expanded unquoted on purpose: it is either empty
+# or "--format docker".
+"${ENGINE}" build --pull --no-cache ${FORMAT} \
     --build-arg USERNAME="$(id -un)" \
     --build-arg USERSHELL="${SHELL:-/bin/bash}" \
-    -t "${IMAGE}" -f Containerfile .
+    -t "${IMAGE}" -f "${CONTAINERFILE}" .
 
 new_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
     "${IMAGE}")"

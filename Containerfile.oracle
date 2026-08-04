@@ -1,0 +1,577 @@
+# AI CLI sandbox with Oracle Database Free, on Oracle Linux 8.
+#
+# A variant of Containerfile.ubuntu built on Oracle's official
+# Oracle Database Free image (currently 26ai; Oracle Free Use
+# Terms and Conditions license), which creates the database on
+# first boot and ships a healthcheck.  The regular image is
+# used instead of the -lite variant so the full ORACLE_HOME is
+# present: the OCI header files in
+# ${ORACLE_HOME}/rdbms/public, libclntsh, sqlplus, and sqlldr,
+# so no Instant Client is needed.  The image's latest tag is
+# Oracle Linux 8 based on both amd64 and arm64 (the installed
+# RPM is an el8 package), which determines the package set
+# below.
+#
+# Agents installed (command names in parentheses):
+#   Claude Code (claude), opencode, openclaw, goose, pi, aider
+#
+# Compared with Containerfile.ubuntu, the following are left
+# out because Oracle Linux 8 packaging or its glibc 2.28 makes
+# them non-trivial to install:
+#
+# - Kiro CLI: only distributed as an Ubuntu .deb
+# - ast-grep: upstream binaries need glibc 2.34
+# - splint, entr, fop, collectd-utils: not packaged for Oracle
+#   Linux 8
+#
+# Substitutions:
+#
+# - ctags is exuberant ctags (universal-ctags is not packaged)
+# - shfmt and shunit2 come from their upstream releases
+# - R comes from EPEL (CRAN publishes no Oracle Linux packages)
+# - black, codespell, flake8, mypy, and pylint are uv tools
+#   (EPEL's builds are missing or built for Python 3.6)
+# - MySQL comes from Oracle Linux's mysql module and
+#   PostgreSQL from the PGDG yum repository (one major
+#   version, not the all-majors development packages)
+# - Terraform, OpenTofu, and Salt install from the RPM
+#   equivalents of the apt repositories Containerfile.ubuntu
+#   uses; Ansible comes from EPEL
+#
+# Build with the container user named after the invoking user
+# so absolute paths (and the session state that tools key on
+# them) match between host and container:
+#
+#   podman build --build-arg USERNAME="$(id -un)" \
+#       --build-arg USERSHELL="${SHELL}" \
+#       -t aisandbox-oracle -f Containerfile.oracle .
+#
+# or run "./update-aisandbox oracle".  Start with
+#
+#   ./start-aisandbox oracle
+#
+# which also names the container aisandbox-oracle, so it can
+# run alongside the default ubuntu sandbox.
+#
+# The ENTRYPOINT set at the end of this file starts the
+# database no matter what command the run command appends (the
+# base image only sets a CMD, which start-aisandbox's idle
+# command would otherwise replace).  The first boot takes a few
+# minutes to create the database; wait for "DATABASE IS READY
+# TO USE!" in the container logs or for the inherited
+# healthcheck to pass, then connect to //localhost:1521/FREEPDB1
+# as system with the ORACLE_PWD set below.  start-aisandbox
+# runs every flavor on the host network, so the listener also
+# binds port 1521 on the host.  The database runs
+# as the image's oracle user (uid 54321), so the entrypoint
+# must, too; agent work happens as the unprivileged uid-1000
+# user created near the end of this file, which open-shell
+# selects by default for this flavor ("open-shell oracle -u
+# oracle" reaches the database user):
+#
+#   ./open-shell oracle
+#
+# Database data lives in /opt/oracle/oradata and is not
+# persisted across container removal.
+
+FROM container-registry.oracle.com/database/free:latest
+
+USER root
+
+# Everything installed from the Oracle Linux 8 repositories, in
+# one layer, covering the same ground as Containerfile.ubuntu's
+# first layer where packages exist: oracle-epel-release-el8
+# adds the ol8_developer_EPEL repository (EPEL builds published
+# by Oracle), and ol8_codeready_builder carries meson,
+# ninja-build, pandoc, and several -devel packages.
+# install_weak_deps=False matches apt's
+# --no-install-recommends.
+#
+# Notes relative to the Ubuntu package set:
+#
+# - sqlite provides the sqlite3 command;
+# - fd-find installs /usr/bin/fd directly (no fdfind rename);
+# - perf is the real binary (no kernel-version wrapper);
+# - glibc-langpack-en provides the en_US.UTF-8 locale, so no
+#   locale-gen step is needed;
+# - python3.12 does not provide /usr/bin/python3 (Oracle
+#   Linux 8 reserves it for the python36 package), so symlinks
+#   in /usr/local/bin put python3 and pip3 on the PATH ahead of
+#   any 3.6 that a dependency may drag in.
+#
+# At the end, "git lfs install --system" registers the LFS
+# filters so clones fetch LFS content.
+#
+# The base image is built inside Oracle Cloud, whose setup
+# writes the build machine's region into /etc/yum/vars/
+# ociregion, pointing the repositories at an OCI-internal
+# mirror (yum-<region>.oracle.com) that is unreachable from
+# outside; truncating the file makes the $ociregion variable
+# expand to nothing, falling back to the public
+# yum.oracle.com.
+RUN : > /etc/yum/vars/ociregion \
+    && dnf -y --setopt=install_weak_deps=False install \
+        oracle-epel-release-el8 \
+    && dnf -y --setopt=install_weak_deps=False \
+        --enablerepo ol8_developer_EPEL \
+        --enablerepo ol8_codeready_builder install \
+        ansible \
+        autoconf \
+        automake \
+        bash-completion \
+        binutils \
+        bison \
+        bzip2 \
+        ca-certificates \
+        cloc \
+        cmake \
+        collectd \
+        cppcheck \
+        cscope \
+        ctags \
+        curl \
+        diffutils \
+        docbook-dtds \
+        docbook-style-xsl \
+        dos2unix \
+        fd-find \
+        file \
+        findutils \
+        flex \
+        fzf \
+        gcc \
+        gcc-c++ \
+        gdb \
+        git \
+        git-lfs \
+        glibc-devel \
+        glibc-langpack-en \
+        gnupg2 \
+        gnuplot \
+        graphviz \
+        gzip \
+        hostname \
+        hyperfine \
+        ImageMagick \
+        jq \
+        less \
+        libev-devel \
+        libtool \
+        libxml2 \
+        libxslt \
+        make \
+        man-db \
+        meson \
+        moreutils \
+        neovim \
+        ninja-build \
+        openssh-clients \
+        pandoc \
+        patch \
+        perf \
+        pkgconf-pkg-config \
+        poppler-utils \
+        procps-ng \
+        python3.12 \
+        python3.12-pip \
+        quilt \
+        R-core \
+        R-core-devel \
+        ripgrep \
+        rsync \
+        ShellCheck \
+        sqlite \
+        sqlite-devel \
+        strace \
+        sysstat \
+        tar \
+        tidy \
+        tmux \
+        tree \
+        unixODBC \
+        unixODBC-devel \
+        unzip \
+        wget \
+        which \
+        xz \
+        yamllint \
+        zip \
+        zsh \
+        zstd \
+    && dnf clean all \
+    && git lfs install --system \
+    && ln -s /usr/bin/python3.12 /usr/local/bin/python3 \
+    && ln -s /usr/bin/pip3.12 /usr/local/bin/pip3
+
+ENV LANG=en_US.UTF-8
+
+# OCI client development files, completing the database client
+# development files the way Containerfile.ubuntu's Instant
+# Client layer does: the headers already live in
+# ${ORACLE_HOME}/rdbms/public, and the ld.so.conf.d entry makes
+# the client libraries in ${ORACLE_HOME}/lib visible
+# system-wide.
+RUN echo "${ORACLE_HOME}/lib" \
+        > /etc/ld.so.conf.d/oracle-home.conf \
+    && ldconfig
+
+# MySQL server and client development files from Oracle
+# Linux 8's mysql module (dnf resolves its default mysql:8.0
+# stream on its own), matching Containerfile.ubuntu's
+# mysql-server-8.0 and libmysqlclient-dev.  As there, no init
+# system runs here, and the package's /var/lib/mysql is not
+# writable by the container user, so initialize a data
+# directory in ${HOME} and run the server in the foreground:
+#   mysqld --initialize-insecure --datadir="${HOME}/mysql"
+#   mysqld --datadir="${HOME}/mysql" \
+#       --socket="${HOME}/mysql/mysql.sock"
+RUN dnf -y --setopt=install_weak_deps=False install \
+        mysql-devel \
+        mysql-server \
+    && dnf clean all
+
+# PostgreSQL client, server, and development packages from the
+# PGDG yum repository, the equivalent of Containerfile.ubuntu's
+# PGDG apt layer: the repository RPM sets up every maintained
+# major version's repository, the stock postgresql module is
+# disabled per the PGDG install instructions, and
+# ol8_codeready_builder supplies development dependencies.
+# PGDG yum has no equivalent of apt's
+# postgresql-server-dev-all, so the newest major is pinned
+# here; bump the pinned version to update, in the ENV line
+# below too: the packages install under /usr/pgsql-18/bin
+# (psql, pg_config, initdb), which the PATH addition makes
+# reachable without version-specific paths.
+RUN v="18" \
+    && dnf -y install \
+        "https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm" \
+    && dnf -qy module disable postgresql \
+    && dnf -y --setopt=install_weak_deps=False \
+        --enablerepo ol8_codeready_builder install \
+        "postgresql${v}-devel" \
+        "postgresql${v}-server" \
+    && dnf clean all
+ENV PATH=${PATH}:/usr/pgsql-18/bin
+
+# Node.js 24, from the official nodejs.org binary tarball as in
+# Containerfile.ubuntu.  nodejs.org builds its Linux binaries
+# on RHEL 8, so they need exactly the glibc 2.28 this image
+# has; Oracle Linux 8's own nodejs module is much older.
+RUN case "$(uname -m)" in \
+        x86_64) arch=x64 ;; \
+        aarch64) arch=arm64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && curl -fsSL -O \
+        https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt \
+    && f=$(awk -v a="${arch}" \
+        '$2 ~ "^node-v.*-linux-" a "\\.tar\\.xz$" { print $2 }' \
+        SHASUMS256.txt) \
+    && curl -fsSL -O "https://nodejs.org/dist/latest-v24.x/${f}" \
+    && awk -v f="${f}" '$2 == f' SHASUMS256.txt | sha256sum -c - \
+    && tar -xJf "${f}" -C /usr/local --strip-components=1 \
+    && rm -f "${f}" SHASUMS256.txt /usr/local/CHANGELOG.md \
+        /usr/local/LICENSE /usr/local/README.md
+
+# GitHub CLI (gh) from GitHub's own RPM repository (Oracle
+# Linux does not package gh at all).
+RUN curl -fsSL -o /etc/yum.repos.d/gh-cli.repo \
+        https://cli.github.com/packages/rpm/gh-cli.repo \
+    && dnf -y --setopt=install_weak_deps=False install gh \
+    && dnf clean all
+
+# Go toolchain from the official go.dev binary tarball (gofmt
+# and go vet come with it): Oracle Linux 8's golang sits behind
+# dnf modularity and lags upstream.  The tarball name and
+# checksum come from the go.dev download metadata, resolved
+# like the Node.js step above.
+RUN case "$(uname -m)" in \
+        x86_64) arch=amd64 ;; \
+        aarch64) arch=arm64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && json=$(curl -fsSL 'https://go.dev/dl/?mode=json') \
+    && f=$(printf '%s' "${json}" \
+        | jq -r --arg a "${arch}" '.[0].files[] \
+            | select(.os=="linux" and .arch==$a \
+                and .kind=="archive") | .filename') \
+    && s=$(printf '%s' "${json}" \
+        | jq -r --arg a "${arch}" '.[0].files[] \
+            | select(.os=="linux" and .arch==$a \
+                and .kind=="archive") | .sha256') \
+    && curl -fsSL -O "https://go.dev/dl/${f}" \
+    && printf '%s  %s\n' "${s}" "${f}" | sha256sum -c - \
+    && tar -xzf "${f}" -C /usr/local \
+    && rm -f "${f}" \
+    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
+# npm-distributed agents, as in Containerfile.ubuntu.
+#
+# --allow-scripts approves the install scripts these packages
+# and their dependencies run: npm 11 only warns about scripts
+# not covered by allowScripts, but npm 12 will refuse to run
+# them, and "npm approve-scripts" cannot cover global installs.
+# The flag is a single argument and cannot be wrapped.
+RUN npm install -g \
+        --allow-scripts=@anthropic-ai/claude-code,@google/genai,opencode-ai,openclaw,protobufjs,tree-sitter-bash \
+        @anthropic-ai/claude-code \
+        @earendil-works/pi-coding-agent \
+        opencode-ai \
+        openclaw
+
+# goose (Block).  CONFIGURE=false skips the interactive setup
+# that the install script otherwise runs.  The released binary
+# needs glibc 2.28, exactly what this image has.
+RUN curl -fsSL \
+        https://github.com/block/goose/releases/download/stable/download_cli.sh \
+    | GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
+
+# aider, installed the way its own install script does (via uv)
+# but into system-wide locations so any user can run it.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+        uv tool install --python 3.12 aider-chat \
+    && chmod -R a+rX /opt/uv-tools
+
+# Linters and formatters distributed via npm, as in
+# Containerfile.ubuntu.
+RUN npm install -g \
+        @prantlf/jsonlint \
+        eslint \
+        htmlhint \
+        markdownlint-cli \
+        prettier \
+        stylelint \
+        typescript
+
+# Python-based tools installed as isolated uv tools with
+# system-wide commands, as in Containerfile.ubuntu, plus the
+# linters that image takes from apt (black, codespell, flake8,
+# mypy, pylint): EPEL either lacks them or builds them for
+# Python 3.6.
+RUN env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+        sh -c 'for t in black codespell cpplint doc8 flake8 \
+            mypy pre-commit proselint pylint \
+            restructuredtext-lint ruff sqlfluff; do \
+                uv tool install --python 3.12 "${t}" || exit 1; \
+            done' \
+    && chmod -R a+rX /opt/uv-tools
+
+# hadolint (Containerfile/Dockerfile linter); statically linked
+# amd64 binary.
+RUN curl -fsSL -o /usr/local/bin/hadolint \
+        https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
+    && chmod +x /usr/local/bin/hadolint
+
+# golangci-lint, the standard Go meta-linter (bundles
+# staticcheck and friends); amd64 binary, verified and pinned
+# as in Containerfile.ubuntu.  Bump the pinned version here to
+# update.
+RUN v="2.12.2" \
+    && base="golangci-lint-${v}-linux-amd64" \
+    && url="https://github.com/golangci/golangci-lint/releases/download/v${v}" \
+    && cd /tmp \
+    && curl -fsSL -O "${url}/${base}.tar.gz" \
+    && curl -fsSL "${url}/golangci-lint-${v}-checksums.txt" \
+        | awk -v f="${base}.tar.gz" '$2 == f' \
+        | sha256sum -c - \
+    && tar -xzf "${base}.tar.gz" \
+    && mv "${base}/golangci-lint" /usr/local/bin/ \
+    && rm -rf "${base}" "${base}.tar.gz"
+
+# actionlint (GitHub Actions workflow linter); amd64 binary,
+# pinned because the release asset name embeds the version.
+# Bump the pinned version here to update.
+RUN v="1.7.12" \
+    && f="actionlint_${v}_linux_amd64.tar.gz" \
+    && cd /tmp \
+    && curl -fsSL -O \
+        "https://github.com/rhysd/actionlint/releases/download/v${v}/${f}" \
+    && tar -xzf "${f}" actionlint \
+    && mv actionlint /usr/local/bin/ \
+    && rm -f "${f}"
+
+# gitleaks (secret scanner, to keep credentials out of
+# commits); amd64 binary, pinned like actionlint above.
+RUN v="8.30.1" \
+    && f="gitleaks_${v}_linux_x64.tar.gz" \
+    && cd /tmp \
+    && curl -fsSL -O \
+        "https://github.com/gitleaks/gitleaks/releases/download/v${v}/${f}" \
+    && tar -xzf "${f}" gitleaks \
+    && mv gitleaks /usr/local/bin/ \
+    && rm -f "${f}"
+
+# mikefarah's yq (Go YAML processor); amd64 binary, like the
+# hadolint step above.
+RUN curl -fsSL -o /usr/local/bin/yq \
+        https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
+    && chmod +x /usr/local/bin/yq
+
+# shfmt (shell formatter), which Containerfile.ubuntu takes
+# from apt; not packaged for Oracle Linux 8, so use the
+# statically linked release binary, pinned like actionlint
+# above.
+RUN v="3.13.1" \
+    && curl -fsSL -o /usr/local/bin/shfmt \
+        "https://github.com/mvdan/sh/releases/download/v${v}/shfmt_v${v}_linux_amd64" \
+    && chmod +x /usr/local/bin/shfmt
+
+# shunit2 shell-script unit-test framework (Apache License
+# 2.0), which Containerfile.ubuntu takes from apt; not packaged
+# for Oracle Linux 8, so install the single upstream script,
+# pinned like actionlint above.
+RUN v="2.1.8" \
+    && curl -fsSL -o /usr/local/bin/shunit2 \
+        "https://raw.githubusercontent.com/kward/shunit2/v${v}/shunit2" \
+    && chmod 755 /usr/local/bin/shunit2
+
+# Rust via rustup, installed system-wide and read-only.  The
+# default profile includes clippy (linter) and rustfmt.  Only
+# RUSTUP_HOME is exported: CARGO_HOME stays at its ~/.cargo
+# default so per-user cargo builds can write their registry.
+RUN curl -fsSL https://sh.rustup.rs \
+    | env RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust \
+        sh -s -- -y --no-modify-path --profile default \
+    && chmod -R a+rX /opt/rust
+ENV RUSTUP_HOME=/opt/rust \
+    PATH=/opt/rust/bin:${PATH}
+
+# Julia from the official julialang.org binary tarball, as in
+# Containerfile.ubuntu; verified against the release's
+# published checksum file and pinned because the URLs embed the
+# version (the directory component is the major.minor prefix).
+# Bump the pinned version here to update.
+RUN v="1.12.6" \
+    && case "$(uname -m)" in \
+        x86_64) arch=x64 ;; \
+        aarch64) arch=aarch64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && f="julia-${v}-linux-$(uname -m).tar.gz" \
+    && cd /tmp \
+    && curl -fsSL -O \
+        "https://julialang-s3.julialang.org/bin/linux/${arch}/${v%.*}/${f}" \
+    && curl -fsSL \
+        "https://julialang-s3.julialang.org/bin/checksums/julia-${v}.sha256" \
+        | awk -v f="${f}" '$2 == f' \
+        | sha256sum -c - \
+    && tar -xzf "${f}" -C /opt \
+    && rm -f "${f}" \
+    && ln -s "/opt/julia-${v}/bin/julia" /usr/local/bin/julia
+
+# AWS CLI v2 from the official installer zip, as in
+# Containerfile.ubuntu.  The zip name embeds the architecture
+# exactly as uname -m reports it (x86_64, aarch64), so both
+# amd64 and arm64 work without a case statement.
+RUN cd /tmp \
+    && f="awscli-exe-linux-$(uname -m).zip" \
+    && curl -fsSL -O "https://awscli.amazonaws.com/${f}" \
+    && unzip -q "${f}" \
+    && ./aws/install \
+    && rm -rf "${f}" aws
+
+# Session Manager plugin for the AWS CLI
+# (session-manager-plugin, needed by "aws ssm start-session"),
+# from AWS's official .rpm.  The URL's directory component
+# names the architecture, so map uname -m to it like the
+# Node.js step above.
+RUN case "$(uname -m)" in \
+        x86_64) arch=linux_64bit ;; \
+        aarch64) arch=linux_arm64 ;; \
+        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/session-manager-plugin.rpm \
+        "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/${arch}/session-manager-plugin.rpm" \
+    && rpm -i /tmp/session-manager-plugin.rpm \
+    && rm -f /tmp/session-manager-plugin.rpm
+
+# Terraform from HashiCorp's RPM repository, using the .repo
+# file HashiCorp publishes for RHEL-family distributions (its
+# $releasever expands to 8 here).  Terraform is under the
+# Business Source License since 1.6; the OpenTofu step below
+# installs the open-source fork.
+RUN curl -fsSL -o /etc/yum.repos.d/hashicorp.repo \
+        https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo \
+    && dnf -y --setopt=install_weak_deps=False install terraform \
+    && dnf clean all
+
+# OpenTofu (tofu), the open-source Terraform fork, from its
+# packagecloud RPM repository, following the project's own
+# install documentation: the repository is signed with two keys
+# (the OpenTofu project key and the packagecloud repository
+# key), both listed in gpgkey, and the rpm_any path serves
+# every RPM-based distribution.
+RUN printf '%s\n' \
+        '[opentofu]' \
+        'name=opentofu' \
+        'baseurl=https://packages.opentofu.org/opentofu/tofu/rpm_any/rpm_any/$basearch' \
+        'repo_gpgcheck=0' \
+        'gpgcheck=1' \
+        'enabled=1' \
+        'gpgkey=https://get.opentofu.org/opentofu.gpg' \
+        '       https://packages.opentofu.org/opentofu/tofu/gpgkey' \
+        'sslverify=1' \
+        'sslcacert=/etc/pki/tls/certs/ca-bundle.crt' \
+        'metadata_expire=300' \
+        > /etc/yum.repos.d/opentofu.repo \
+    && dnf -y --setopt=install_weak_deps=False install tofu \
+    && dnf clean all
+
+# Salt from the Salt Project RPM repository (hosted on
+# Broadcom's Artifactory since 2024), following the project's
+# own install documentation: it publishes a ready-made
+# salt.repo file that serves every RPM-based distribution (the
+# onedir packages bundle their own Python, built for broad
+# glibc compatibility).  salt-master and salt-minion install
+# their daemons; salt-ssh works agentless over SSH, and
+# salt-call --local (from salt-common) applies states
+# masterless.  There is no init system here, so run the daemons
+# in the foreground:
+#   salt-master -l info
+#   salt-minion -l info
+RUN curl -fsSL -o /etc/yum.repos.d/salt.repo \
+        https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.repo \
+    && dnf -y --setopt=install_weak_deps=False install \
+        salt-master \
+        salt-minion \
+        salt-ssh \
+    && dnf clean all
+
+# Unlike Containerfile.ubuntu, which renames the stock ubuntu
+# user, this base image has no uid-1000 user, so create one
+# named after the invoking host user for agent work (the
+# database itself runs as the oracle user, uid 54321).  Claude
+# Code and other agents key per-project state on absolute
+# paths, so /home/<user> must match the host for sessions
+# started on one side to resume on the other.  USERSHELL gives
+# the user the same login shell as on the host so ${SHELL} and
+# anything that spawns it behave alike.
+ARG USERNAME=sandbox
+ARG USERSHELL=/bin/bash
+RUN useradd -m -u 1000 -s "${USERSHELL}" "${USERNAME}" \
+    && mkdir -p "/home/${USERNAME}/work" \
+    && chown "${USERNAME}:${USERNAME}" "/home/${USERNAME}/work"
+
+# Updating inside a container makes no sense; pin what was built.
+ENV DISABLE_AUTOUPDATER=1
+
+# SYS/SYSTEM password for the first-boot database creation (the
+# base image otherwise generates a random one and prints it in
+# the container log).
+ENV ORACLE_PWD=oracle
+
+# The base image starts the database from a CMD, which any
+# command given to the run command (such as start-aisandbox's
+# idle "sleep infinity") would replace, leaving the database
+# down.  Promote it to an ENTRYPOINT instead: declaring an
+# ENTRYPOINT here resets the inherited CMD, and any appended
+# command becomes unused arguments of the -c script, so the
+# database starts no matter how the container is run.  The
+# script must run as the oracle user, hence USER oracle.
+USER oracle
+ENTRYPOINT ["/bin/bash", "-c", "exec ${ORACLE_BASE}/${RUN_FILE}"]

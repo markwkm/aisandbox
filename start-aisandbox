@@ -1,32 +1,61 @@
 #!/bin/sh
-# Start the aisandbox container (see Containerfile) detached in
-# the background, preferring podman and falling back to docker.
-# Open a shell inside it with open-shell.
+# Start the aisandbox container (see Containerfile.ubuntu, the
+# default image, and the other Containerfile.* variants)
+# detached in the background, preferring podman and falling
+# back to docker.  Open a shell inside it with open-shell.
 #
 # Mounts the source directory (default ~/.local/src) read/write,
 # plus the per-tool config, cache, and state directories of the AI
 # CLIs baked into the image, so logins and history persist across
 # container runs.
 #
-# Usage: start-aisandbox [source-dir]
+# Usage: start-aisandbox [flavor] [source-dir]
 #
-# The optional source-dir argument takes precedence over
-# AISANDBOX_SRC.
+# A first argument naming a Containerfile flavor next to this
+# script selects it, like update-aisandbox (e.g.
+# "start-aisandbox oracle" runs Containerfile.oracle's image);
+# any other argument is the source directory.  The arguments
+# take precedence over AISANDBOX_FLAVOR and AISANDBOX_SRC.
 #
 # Environment:
-#   AISANDBOX_IMAGE  image to run (default: aisandbox)
-#   AISANDBOX_NAME   container name (default: aisandbox)
-#   AISANDBOX_SRC    source directory mounted read/write and used
-#                    as the working directory
-#                    (default: ~/.local/src)
+#   AISANDBOX_FLAVOR  Containerfile variant to run
+#                     (default: ubuntu)
+#   AISANDBOX_IMAGE   image to run (default: aisandbox for the
+#                     ubuntu flavor, aisandbox-<flavor> for the
+#                     others)
+#   AISANDBOX_NAME    container name (default: same as the
+#                     image default)
+#   AISANDBOX_SRC     source directory mounted read/write and
+#                     used as the working directory
+#                     (default: ~/.local/src)
 #
 # Stop with stop-aisandbox; the container is removed
 # automatically when stopped.
+#
+# The Oracle variant runs with the same command
+# (AISANDBOX_FLAVOR=oracle): its image entrypoint starts the
+# database and treats the idle command appended below as
+# ignorable arguments.  See the Containerfile.oracle header
+# for how to open shells in it.
+#
+# Each flavor gets its own container name (aisandbox,
+# aisandbox-oracle, ...), so one container per Containerfile
+# can run at a time and the flavors can run side by side.
 
 set -eu
 
-IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
-NAME="${AISANDBOX_NAME:-aisandbox}"
+FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
+if [ $# -ge 1 ] && [ -f "$(dirname "$0")/Containerfile.${1}" ]; then
+    FLAVOR="$1"
+    shift
+fi
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
+    NAME="${AISANDBOX_NAME:-aisandbox}"
+else
+    IMAGE="${AISANDBOX_IMAGE:-aisandbox-${FLAVOR}}"
+    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
+fi
 SRC="${1:-${AISANDBOX_SRC:-${HOME}/.local/src}}"
 
 # Container engines require absolute paths in -v mounts, so
@@ -171,8 +200,17 @@ fi
 # --init makes PID 1 a real init that forwards SIGTERM, so
 # "stop" is immediate instead of waiting out a 10 s timeout
 # before SIGKILLing the idle sleep.
-set -- run -d --rm --init --name "${NAME}" --hostname aisandbox \
-    --network host -w "${SRC}" "$@"
+#
+# --shm-size raises /dev/shm above the engines' 64 MB default:
+# the Oracle variant's database keeps its SGA there, and tmpfs
+# pages cost nothing until written, so the ubuntu image is
+# unaffected.
+#
+# All flavors share the host network, so servers a flavor runs
+# (the oracle flavor's database listener on 1521) bind their
+# ports directly on the host.
+set -- run -d --rm --init --name "${NAME}" --hostname "${NAME}" \
+    --network host --shm-size=2g -w "${SRC}" "$@"
 
 "${ENGINE}" "$@" >/dev/null
 echo "container '${NAME}' started;" \

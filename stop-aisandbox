@@ -2,14 +2,27 @@
 # Stop the aisandbox container started by start-aisandbox.  The
 # container removes itself when stopped.
 #
-# Usage: stop-aisandbox
+# Usage: stop-aisandbox [flavor]
+#
+# The optional flavor argument selects which flavor's container
+# to stop, like start-aisandbox (default: ubuntu); it takes
+# precedence over AISANDBOX_FLAVOR.
 #
 # Environment:
-#   AISANDBOX_NAME  container name (default: aisandbox)
+#   AISANDBOX_FLAVOR  Containerfile variant whose container to
+#                     stop (default: ubuntu)
+#   AISANDBOX_NAME    container name (default: aisandbox for
+#                     the ubuntu flavor, aisandbox-<flavor> for
+#                     the others)
 
 set -eu
 
-NAME="${AISANDBOX_NAME:-aisandbox}"
+FLAVOR="${1:-${AISANDBOX_FLAVOR:-ubuntu}}"
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    NAME="${AISANDBOX_NAME:-aisandbox}"
+else
+    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
+fi
 
 if command -v podman >/dev/null 2>&1; then
     ENGINE="podman"
@@ -25,5 +38,9 @@ if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
     exit 0
 fi
 
-"${ENGINE}" stop "${NAME}" >/dev/null
+# -t raises the SIGKILL timeout above the 10 s default: the
+# Oracle variant shuts its database down on SIGTERM, which can
+# take longer than 10 s, while the ubuntu image's idle sleep
+# exits immediately either way.
+"${ENGINE}" stop -t 60 "${NAME}" >/dev/null
 echo "container '${NAME}' stopped"
