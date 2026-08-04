@@ -1,16 +1,24 @@
 #!/bin/sh
-# Update an aisandbox image: rebuild it from scratch so the base
-# image, OS packages, and all agents come in at their current
-# versions, then remove the image it replaces.
+# Update an aisandbox image: rebuild it, then remove the image
+# it replaces.  --pull refreshes the base image, and a new base
+# reruns every step, so OS packages and all agents come in at
+# their current versions whenever the base image has been
+# updated; -n forces that even on an unchanged base.
 #
 # A running container keeps using the old image; restart it with
 # stop-aisandbox and start-aisandbox to pick up the update.
 #
-# Usage: update-aisandbox [flavor]
+# Usage: update-aisandbox [-n] [flavor]
 #
 # The optional flavor argument selects which Containerfile to
 # build: Containerfile.<flavor>, e.g. "ubuntu" (the default) or
 # "oracle".  It takes precedence over AISANDBOX_FLAVOR.
+#
+# Options:
+#   -n  build with --no-cache, forcing every step to rerun so
+#       OS packages and agents fetch current versions even
+#       when the base image is unchanged (also replaces a bad
+#       download cached by an earlier build)
 #
 # Environment:
 #   AISANDBOX_FLAVOR  Containerfile variant to build
@@ -22,6 +30,18 @@
 #                     image default)
 
 set -eu
+
+NOCACHE=""
+while getopts n opt; do
+    case "${opt}" in
+        n) NOCACHE="--no-cache" ;;
+        *)
+            echo "usage: update-aisandbox [-n] [flavor]" >&2
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 FLAVOR="${1:-${AISANDBOX_FLAVOR:-ubuntu}}"
 if [ "${FLAVOR}" = "ubuntu" ]; then
@@ -53,9 +73,13 @@ fi
 old_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
     "${IMAGE}" 2>/dev/null || true)"
 
-# --pull refreshes the base image; --no-cache forces every step
-# to re-run so apt and the agent installers actually fetch
-# current versions instead of reusing cached layers.
+# --pull refreshes the base image; layer caching keys each
+# step on its parent layer, so a new base reruns every step
+# (apt and the agent installers fetch current versions), while
+# a rebuild on an unchanged base reuses completed layers and
+# only reruns from the first changed step (a rerun after a
+# failed build resumes at the step that failed).  -n adds
+# --no-cache, forcing a full rerun regardless.
 #
 # podman defaults to the OCI image format, which discards any
 # HEALTHCHECK (the oracle flavor inherits one from its base
@@ -65,11 +89,17 @@ FORMAT=""
 if [ "${ENGINE}" = "podman" ]; then
     FORMAT="--format docker"
 fi
-echo "rebuilding '${IMAGE}' without cache;" \
-    "this can take half an hour"
-# ${FORMAT} is expanded unquoted on purpose: it is either empty
-# or "--format docker".
-"${ENGINE}" build --pull --no-cache ${FORMAT} \
+if [ -n "${NOCACHE}" ]; then
+    echo "rebuilding '${IMAGE}' without cache;" \
+        "this can take half an hour"
+else
+    echo "rebuilding '${IMAGE}'; this can take half an hour" \
+        "when the base image has changed (unchanged steps" \
+        "reuse cached layers)"
+fi
+# ${FORMAT} and ${NOCACHE} are expanded unquoted on purpose:
+# each is either empty or a single flag.
+"${ENGINE}" build --pull ${FORMAT} ${NOCACHE} \
     --build-arg USERNAME="$(id -un)" \
     --build-arg USERSHELL="${SHELL:-/bin/bash}" \
     -t "${IMAGE}" -f "${CONTAINERFILE}" .

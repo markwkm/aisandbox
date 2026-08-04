@@ -224,7 +224,8 @@ RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
 # its confirmation prompt, and it sticks to apt-get throughout.
 # postgresql-server-dev-all covers every major version PGDG
 # still publishes (currently 10 through 18), so no version is
-# pinned here and new majors arrive with a rebuild.
+# pinned here and new majors arrive when this layer reruns (a
+# base-image update or a --no-cache rebuild).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-common \
@@ -603,8 +604,8 @@ RUN key=/etc/apt/keyrings/ansible-archive-keyring.gpg \
 # accepts directly in a keyring file.  The "stable" suite
 # carries amd64 and arm64 onedir packages; no version is pinned
 # (the docs suggest an apt pin), so, as with PGDG, new releases
-# arrive with a rebuild.  salt-master and salt-minion install
-# their daemons; salt-ssh works agentless over SSH, and
+# arrive when this layer reruns.  salt-master and salt-minion
+# install their daemons; salt-ssh works agentless over SSH, and
 # salt-call --local (from salt-common) applies states
 # masterless.  As with collectd and MySQL above there is no
 # init system here, so run the daemons in the foreground:

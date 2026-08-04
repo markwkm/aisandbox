@@ -48,9 +48,9 @@ Files
     Stops the sandbox container, which removes itself.
 
 ``update-aisandbox``
-    Rebuilds an image from scratch so the base image, OS packages, and
-    agents come in at current versions, then removes the replaced image.
-    Builds ``Containerfile.ubuntu`` unless a flavor argument names another
+    Rebuilds an image so the base image, OS packages, and agents come in
+    at current versions, then removes the replaced image.  Builds
+    ``Containerfile.ubuntu`` unless a flavor argument names another
     variant.
 
 Building the image
@@ -80,12 +80,17 @@ self-updaters are disabled inside the image)::
 
     ./update-aisandbox
 
-The update script rebuilds with ``--pull --no-cache`` so the base image and
-every install step actually fetch current versions instead of reusing
-cached layers, then removes the image it replaced.  A running container
-stays on the old image until restarted with ``stop-aisandbox`` and
-``start-aisandbox``.  A flavor argument selects another
-``Containerfile.<flavor>`` and tags the image ``aisandbox-<flavor>``::
+The update script rebuilds with ``--pull``, which refreshes the base
+image; a new base reruns every install step, so OS packages and agents
+fetch current versions whenever the base image has been updated, while a
+rebuild on an unchanged base reuses cached layers (a rerun after a failed
+build resumes from the step that failed rather than starting over).
+``update-aisandbox -n`` adds ``--no-cache``, forcing every step to rerun
+even when the base image is unchanged.  The script then removes the image
+it replaced.  A running container stays on the old image until restarted
+with ``stop-aisandbox`` and ``start-aisandbox``.  A flavor argument
+selects another ``Containerfile.<flavor>`` and tags the image
+``aisandbox-<flavor>``::
 
     ./update-aisandbox oracle
 
