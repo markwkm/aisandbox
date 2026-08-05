@@ -8,6 +8,13 @@
 #   Claude Code (claude), Kiro CLI (kiro-cli), opencode, openclaw,
 #   goose, pi, aider
 #
+# Steps that install a tool the same way in every flavor run a
+# script from tools/, which carries that tool's own notes and
+# version pin; this file keeps what is specific to Ubuntu.  The
+# scripts are copied to /opt/aisandbox in the image, one COPY
+# per step, so editing a script reruns only its own step and
+# the ones after it.
+#
 # Build with the container user named after the invoking user so
 # absolute paths (and the session state that tools key on them)
 # match between host and container:
@@ -27,8 +34,13 @@
 
 FROM docker.io/library/ubuntu:24.04
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=C.UTF-8
+# DEBIAN_FRONTEND is a build argument rather than an environment
+# variable: it keeps apt from prompting during the build without
+# following the image into the running container, where someone
+# installing a package by hand should still see the prompts.
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV LANG=C.UTF-8
 
 # Everything installed from Ubuntu's repositories, in one layer:
 #
@@ -167,32 +179,12 @@ RUN apt-get update \
     && ln -s "$(find /usr/lib/linux-tools* -name perf | head -1)" \
         /usr/local/bin/perf
 
-# Node.js 24 (openclaw requires >= 22.22.3; 24.x covers all the
-# npm-installed agents), from the official nodejs.org binary
-# tarball, unpacked into /usr/local; it ships node, npm, npx,
-# and corepack.  NodeSource's apt repository, used previously,
-# sits behind a Cloudflare challenge that answers plain HTTP
-# clients with 403 (nodesource/distributions issue #1844), which
-# broke builds.  The tarball name embeds the version, so resolve
-# it from the SHASUMS256.txt in the latest-v24.x directory and
-# verify the download against that same file, like the
-# golangci-lint step below.
-RUN case "$(uname -m)" in \
-        x86_64) arch=x64 ;; \
-        aarch64) arch=arm64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && cd /tmp \
-    && curl -fsSL -O \
-        https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt \
-    && f=$(awk -v a="${arch}" \
-        '$2 ~ "^node-v.*-linux-" a "\\.tar\\.xz$" { print $2 }' \
-        SHASUMS256.txt) \
-    && curl -fsSL -O "https://nodejs.org/dist/latest-v24.x/${f}" \
-    && awk -v f="${f}" '$2 == f' SHASUMS256.txt | sha256sum -c - \
-    && tar -xJf "${f}" -C /usr/local --strip-components=1 \
-    && rm -f "${f}" SHASUMS256.txt /usr/local/CHANGELOG.md \
-        /usr/local/LICENSE /usr/local/README.md
+# Helper library the install scripts below source; every step
+# after this one reruns when it changes.
+COPY tools/lib.sh /opt/aisandbox/
+
+COPY tools/install-node.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-node.sh
 
 # Kiro CLI from the official Ubuntu package (installs system-wide,
 # unlike the per-user https://cli.kiro.dev/install script).
@@ -226,9 +218,9 @@ RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
 # bundled signing key and runs apt-get update itself; -y skips
 # its confirmation prompt, and it sticks to apt-get throughout.
 # postgresql-server-dev-all covers every major version PGDG
-# still publishes (currently 10 through 18), so no version is
-# pinned here and new majors arrive when this layer reruns (a
-# base-image update or a --no-cache rebuild).
+# still publishes (currently 10 through 18), so only the server
+# package names a major version; bump PG_MAJOR to move it.
+ARG PG_MAJOR=18
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-common \
@@ -236,7 +228,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq-dev \
         postgresql-server-dev-all \
-        postgresql-18 \
+        "postgresql-${PG_MAJOR}" \
     && rm -rf /var/lib/apt/lists/*
 
 # Oracle Instant Client, Basic Light and SDK packages: OCI
@@ -278,32 +270,27 @@ RUN apt-get update \
         > /etc/ld.so.conf.d/oracle-instantclient.conf \
     && ldconfig
 
-# MySQL server from Ubuntu's repositories: unlike PostgreSQL,
-# Ubuntu keeps MySQL patched (8.0.x), so no third-party
-# repository is needed.  A separate layer rather than an
-# addition to the first one so the toolchain layer's build
-# cache survives.  As with collectd, there is no init system
-# here, and the package's /var/lib/mysql is not writable by the
-# container user, so initialize a data directory in ${HOME} and
-# run the server in the foreground:
+# MySQL server from Ubuntu's repositories, and unixODBC: unlike
+# PostgreSQL, Ubuntu keeps MySQL patched (8.0.x), so no
+# third-party repository is needed.  unixodbc-dev completes the
+# database client development files from the earlier layers with
+# the ODBC API headers (sql.h and friends), libraries, and
+# pkg-config files, while unixodbc (isql, iusql) and odbcinst
+# supply the command-line tools for testing connections and
+# registering drivers.  A separate layer rather than an addition
+# to the first one so the toolchain layer's build cache
+# survives.
+#
+# As with collectd, there is no init system here, and the MySQL
+# package's /var/lib/mysql is not writable by the container
+# user, so initialize a data directory in ${HOME} and run the
+# server in the foreground:
 #   mysqld --initialize-insecure --datadir="${HOME}/mysql"
 #   mysqld --datadir="${HOME}/mysql" \
 #       --socket="${HOME}/mysql/mysql.sock"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         mysql-server-8.0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# unixODBC, completing the database client development files
-# from the earlier layers: unixodbc-dev carries the ODBC API
-# headers (sql.h and friends), libraries, and pkg-config files
-# for building ODBC client programs, while unixodbc (isql,
-# iusql) and odbcinst supply the command-line tools for testing
-# connections and registering drivers.  A separate layer, like
-# the MySQL one above, so the earlier layers' build caches
-# survive.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
         odbcinst \
         unixodbc \
         unixodbc-dev \
@@ -327,215 +314,81 @@ RUN key=/etc/apt/keyrings/cran-archive-keyring.asc \
         r-base-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# npm-distributed agents: Claude Code, opencode, openclaw, and
-# Mario Zechner's pi (now published under the @earendil-works
-# scope; the old @mariozechner packages are deprecated).
-#
-# --allow-scripts approves the install scripts these packages
-# and their dependencies run: npm 11 only warns about scripts
-# not covered by allowScripts, but npm 12 will refuse to run
-# them, and "npm approve-scripts" cannot cover global installs.
-# The flag is a single argument and cannot be wrapped.
-RUN npm install -g \
-        --allow-scripts=@anthropic-ai/claude-code,@google/genai,opencode-ai,openclaw,protobufjs,tree-sitter-bash \
-        @anthropic-ai/claude-code \
-        @earendil-works/pi-coding-agent \
-        opencode-ai \
-        openclaw
+COPY tools/install-npm-agents.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-npm-agents.sh
 
-# goose (Block). CONFIGURE=false skips the interactive setup that
-# the install script otherwise runs.
-RUN curl -fsSL \
-        https://github.com/block/goose/releases/download/stable/download_cli.sh \
-    | GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
+COPY tools/install-goose.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-goose.sh
+
+COPY tools/install-uv.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv.sh
 
 # aider, installed the way its own install script does (via uv)
 # but into system-wide locations so any user can run it.
-RUN curl -LsSf https://astral.sh/uv/install.sh \
-    | env UV_INSTALL_DIR=/usr/local/bin sh \
-    && env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        uv tool install --python 3.12 aider-chat \
-    && chmod -R a+rX /opt/uv-tools
+COPY tools/install-uv-tools.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv-tools.sh aider-chat
 
-# Linters and formatters distributed via npm: JavaScript, CSS,
-# HTML, JSON, and Markdown linters, prettier, and the TypeScript
-# compiler (tsc).  JSON linting uses the maintained
-# @prantlf/jsonlint fork (same jsonlint command): the original
-# jsonlint was last published in 2018 and pulls in the abandoned
-# nomnom package.
-RUN npm install -g \
-        @prantlf/jsonlint \
-        eslint \
-        htmlhint \
-        markdownlint-cli \
-        prettier \
-        stylelint \
-        typescript
+COPY tools/install-npm-linters.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-npm-linters.sh
 
 # Python-based tools either not packaged by Ubuntu or much newer
-# upstream, installed like aider (isolated uv tools with
-# system-wide commands): reStructuredText (doc8, rst-lint), SQL
-# (sqlfluff), C++ style (cpplint), prose (proselint), ruff (the
-# Python linter/formatter most agents now default to), and
-# pre-commit (many repositories gate on "pre-commit run").
-RUN env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        sh -c 'for t in cpplint doc8 pre-commit proselint \
-            restructuredtext-lint ruff sqlfluff; do \
-                uv tool install --python 3.12 "${t}" || exit 1; \
-            done' \
-    && chmod -R a+rX /opt/uv-tools
+# upstream, installed like aider: reStructuredText (doc8,
+# rst-lint), SQL (sqlfluff), C++ style (cpplint), prose
+# (proselint), ruff (the Python linter/formatter most agents now
+# default to), and pre-commit (many repositories gate on
+# "pre-commit run").
+RUN /opt/aisandbox/install-uv-tools.sh \
+        cpplint \
+        doc8 \
+        pre-commit \
+        proselint \
+        restructuredtext-lint \
+        ruff \
+        sqlfluff
 
-# hadolint (Containerfile/Dockerfile linter); amd64 binary, like
-# the Kiro CLI step above.
-RUN curl -fsSL -o /usr/local/bin/hadolint \
-        https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
-    && chmod +x /usr/local/bin/hadolint
+COPY tools/install-hadolint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-hadolint.sh
 
-# golangci-lint, the standard Go meta-linter (bundles staticcheck
-# and friends); amd64 binary, like the Kiro CLI step above.
-# Downloaded directly instead of via the project's install.sh:
-# that script's checksum lookup greps the checksums file by
-# filename, which now also matches the release's
-# "....tar.gz.sbom.json" asset, so it compares the tarball
-# against the wrong hash and always fails.  The exact-match
-# verification below checks the same published checksum
-# correctly.  Bump the pinned version here to update.
-RUN v="2.12.2" \
-    && base="golangci-lint-${v}-linux-amd64" \
-    && url="https://github.com/golangci/golangci-lint/releases/download/v${v}" \
-    && cd /tmp \
-    && curl -fsSL -O "${url}/${base}.tar.gz" \
-    && curl -fsSL "${url}/golangci-lint-${v}-checksums.txt" \
-        | awk -v f="${base}.tar.gz" '$2 == f' \
-        | sha256sum -c - \
-    && tar -xzf "${base}.tar.gz" \
-    && mv "${base}/golangci-lint" /usr/local/bin/ \
-    && rm -rf "${base}" "${base}.tar.gz"
+COPY tools/install-golangci-lint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-golangci-lint.sh
 
-# actionlint (GitHub Actions workflow linter); amd64 binary,
-# pinned because the release asset name embeds the version.
-# Bump the pinned version here to update.
-RUN v="1.7.12" \
-    && f="actionlint_${v}_linux_amd64.tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://github.com/rhysd/actionlint/releases/download/v${v}/${f}" \
-    && tar -xzf "${f}" actionlint \
-    && mv actionlint /usr/local/bin/ \
-    && rm -f "${f}"
+COPY tools/install-actionlint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-actionlint.sh
 
-# gitleaks (secret scanner, to keep credentials out of commits);
-# amd64 binary, pinned like actionlint above.
-RUN v="8.30.1" \
-    && f="gitleaks_${v}_linux_x64.tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://github.com/gitleaks/gitleaks/releases/download/v${v}/${f}" \
-    && tar -xzf "${f}" gitleaks \
-    && mv gitleaks /usr/local/bin/ \
-    && rm -f "${f}"
+COPY tools/install-gitleaks.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-gitleaks.sh
 
-# mikefarah's yq (Go YAML processor).  Ubuntu's "yq" package is
-# the unrelated Python jq wrapper, so install the yq that most
-# documentation assumes; amd64 binary, like the hadolint step
-# above.
-RUN curl -fsSL -o /usr/local/bin/yq \
-        https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
-    && chmod +x /usr/local/bin/yq
+COPY tools/install-yq.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yq.sh
 
-# ast-grep (structural code search and rewriting).  Not
-# installed from its @ast-grep/cli npm package: that package
-# also links an "sg" alias, which would shadow /usr/bin/sg
-# (setgroups, from the shadow suite) from npm's /usr/local
-# prefix.
-# Extract only the ast-grep binary from the release zip; amd64,
-# like the hadolint step above.
-RUN cd /tmp \
-    && curl -fsSL -O \
-        https://github.com/ast-grep/ast-grep/releases/latest/download/app-x86_64-unknown-linux-gnu.zip \
-    && unzip -o app-x86_64-unknown-linux-gnu.zip ast-grep \
-        -d /usr/local/bin \
-    && chmod +x /usr/local/bin/ast-grep \
-    && rm -f app-x86_64-unknown-linux-gnu.zip
+COPY tools/install-ast-grep.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-ast-grep.sh
 
-# Rust via rustup, installed system-wide and read-only.  The
-# default profile includes clippy (linter) and rustfmt.  Only
-# RUSTUP_HOME is exported: CARGO_HOME stays at its ~/.cargo
-# default so per-user cargo builds can write their registry.
-RUN curl -fsSL https://sh.rustup.rs \
-    | env RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust \
-        sh -s -- -y --no-modify-path --profile default \
-    && chmod -R a+rX /opt/rust
+COPY tools/install-rust.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-rust.sh
 ENV RUSTUP_HOME=/opt/rust \
     PATH=/opt/rust/bin:${PATH}
 
-# Julia from the official julialang.org binary tarball, which
-# unpacks into a version-named directory under /opt; the
-# symlink puts the julia command on the PATH.  Verified against
-# the release's published checksum file, like the Node.js step
-# above; pinned because the URLs embed the version (the
-# directory component is the major.minor prefix).  Bump the
-# pinned version here to update.
-RUN v="1.12.6" \
-    && case "$(uname -m)" in \
-        x86_64) arch=x64 ;; \
-        aarch64) arch=aarch64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && f="julia-${v}-linux-$(uname -m).tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://julialang-s3.julialang.org/bin/linux/${arch}/${v%.*}/${f}" \
-    && curl -fsSL \
-        "https://julialang-s3.julialang.org/bin/checksums/julia-${v}.sha256" \
-        | awk -v f="${f}" '$2 == f' \
-        | sha256sum -c - \
-    && tar -xzf "${f}" -C /opt \
-    && rm -f "${f}" \
-    && ln -s "/opt/julia-${v}/bin/julia" /usr/local/bin/julia
+COPY tools/install-julia.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-julia.sh
 
 # Generate the en_US.UTF-8 locale.  The locales package is
-# already present (postgresql-18 depends on it) but ships with
-# every locale commented out in /etc/locale.gen, so the image
-# only has the C/POSIX/C.utf8 locales built into glibc; tools
-# such as PostgreSQL's initdb and CREATE DATABASE expect
-# en_US.UTF-8 to exist.  A separate layer near the end, like
-# the MySQL one above, so the earlier layers' build caches
+# already present (the PostgreSQL server package depends on it)
+# but ships with every locale commented out in /etc/locale.gen,
+# so the image only has the C/POSIX/C.utf8 locales built into
+# glibc; tools such as PostgreSQL's initdb and CREATE DATABASE
+# expect en_US.UTF-8 to exist.  A separate layer near the end,
+# like the MySQL one above, so the earlier layers' build caches
 # survive.
 RUN sed -i 's/^# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
         /etc/locale.gen \
     && locale-gen
 
-# AWS CLI v2 from the official installer zip, AWS's supported
-# distribution channel.  The zip name embeds the architecture
-# exactly as uname -m reports it (x86_64, aarch64), so both
-# amd64 and arm64 work without a case statement.  The installer
-# places the tools under /usr/local/aws-cli and links aws and
-# aws_completer into /usr/local/bin.
-RUN cd /tmp \
-    && f="awscli-exe-linux-$(uname -m).zip" \
-    && curl -fsSL -O "https://awscli.amazonaws.com/${f}" \
-    && unzip -q "${f}" \
-    && ./aws/install \
-    && rm -rf "${f}" aws
+COPY tools/install-awscli.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-awscli.sh
 
-# Session Manager plugin for the AWS CLI (session-manager-plugin,
-# needed by "aws ssm start-session"), from AWS's official .deb,
-# installed like the Kiro CLI step above.  The URL's directory
-# component names the architecture, so map uname -m to it like
-# the Node.js step above.
-RUN case "$(uname -m)" in \
-        x86_64) arch=ubuntu_64bit ;; \
-        aarch64) arch=ubuntu_arm64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && curl -fsSL -o /tmp/session-manager-plugin.deb \
-        "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/${arch}/session-manager-plugin.deb" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        /tmp/session-manager-plugin.deb \
-    && rm -f /tmp/session-manager-plugin.deb \
-    && rm -rf /var/lib/apt/lists/*
+COPY tools/install-session-manager-plugin.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-session-manager-plugin.sh
 
 # Terraform from HashiCorp's apt repository, set up like the
 # GitHub CLI step above; the repository tracks current releases
@@ -628,20 +481,19 @@ RUN key=/etc/apt/keyrings/salt-archive-keyring.pgp \
     && rm -rf /var/lib/apt/lists/*
 
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
-# host user.  Claude Code and other agents key per-project state
-# on absolute paths, so /home/<user> must match the host for
-# sessions started on one side to resume on the other.
+# host user, and give it the same login shell as on the host so
+# ${SHELL} and anything that spawns it behave alike.  Claude
+# Code and other agents key per-project state on absolute paths,
+# so /home/<user> must match the host for sessions started on
+# one side to resume on the other.
 ARG USERNAME=ubuntu
+ARG USERSHELL=/bin/bash
 RUN if [ "${USERNAME}" != "ubuntu" ]; then \
         usermod -l "${USERNAME}" -d "/home/${USERNAME}" -m \
             ubuntu \
         && groupmod -n "${USERNAME}" ubuntu; \
-    fi
-
-# Give the container user the same login shell as on the host so
-# ${SHELL} and anything that spawns it behave alike.
-ARG USERSHELL=/bin/bash
-RUN usermod -s "${USERSHELL}" "${USERNAME}"
+    fi \
+    && usermod -s "${USERSHELL}" "${USERNAME}"
 
 # Updating inside a container makes no sense; pin what was built.
 ENV DISABLE_AUTOUPDATER=1

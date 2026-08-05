@@ -14,6 +14,11 @@
 # Agents installed (command names in parentheses):
 #   Claude Code (claude), opencode, openclaw, goose, pi, aider
 #
+# Steps that install a tool the same way in every flavor run a
+# script from tools/, shared with Containerfile.ubuntu; each
+# script carries that tool's own notes and version pin.  This
+# file keeps what is specific to Oracle Linux.
+#
 # Compared with Containerfile.ubuntu, the following are left
 # out because Oracle Linux 8 packaging or its glibc 2.28 makes
 # them non-trivial to install:
@@ -26,7 +31,8 @@
 # Substitutions:
 #
 # - ctags is exuberant ctags (universal-ctags is not packaged)
-# - shfmt and shunit2 come from their upstream releases
+# - the Go toolchain, shfmt, and shunit2 come from their
+#   upstream releases
 # - R comes from EPEL (CRAN publishes no Oracle Linux packages)
 # - black, codespell, flake8, mypy, and pylint are uv tools
 #   (EPEL's builds are missing or built for Python 3.6)
@@ -245,47 +251,37 @@ RUN dnf -y --setopt=install_weak_deps=False install \
 # disabled per the PGDG install instructions, and
 # ol8_codeready_builder supplies development dependencies.
 # PGDG yum has no equivalent of apt's
-# postgresql-server-dev-all, so the newest major is pinned
-# here; bump the pinned version to update, in the ENV lines
-# below too: the packages install under /usr/pgsql-18 (psql,
-# pg_config, and initdb in bin, libpq.pc in lib/pkgconfig),
-# which the PATH and PKG_CONFIG_PATH additions make reachable
-# without version-specific paths.  libcurl-devel satisfies the
-# libcurl requirement PostgreSQL 18's libpq.pc declares, without
-# which pkg-config cannot resolve libpq's flags.
-RUN v="18" \
-    && dnf -y install \
+# postgresql-server-dev-all, so only one major version is
+# installed; bump PG_MAJOR to move it, which also moves the
+# PATH and PKG_CONFIG_PATH entries below.  The packages install
+# under /usr/pgsql-<major> (psql, pg_config, and initdb in bin,
+# libpq.pc in lib/pkgconfig), which those additions make
+# reachable without version-specific paths.  libcurl-devel
+# satisfies the libcurl requirement PostgreSQL 18's libpq.pc
+# declares, without which pkg-config cannot resolve libpq's
+# flags.
+ARG PG_MAJOR=18
+RUN dnf -y install \
         "https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm" \
     && dnf -qy module disable postgresql \
     && dnf -y --setopt=install_weak_deps=False \
         --enablerepo ol8_codeready_builder install \
         libcurl-devel \
-        "postgresql${v}-devel" \
-        "postgresql${v}-server" \
+        "postgresql${PG_MAJOR}-devel" \
+        "postgresql${PG_MAJOR}-server" \
     && dnf clean all
-ENV PATH=${PATH}:/usr/pgsql-18/bin \
-    PKG_CONFIG_PATH=/usr/pgsql-18/lib/pkgconfig
+ENV PATH=${PATH}:/usr/pgsql-${PG_MAJOR}/bin \
+    PKG_CONFIG_PATH=/usr/pgsql-${PG_MAJOR}/lib/pkgconfig
 
-# Node.js 24, from the official nodejs.org binary tarball as in
-# Containerfile.ubuntu.  nodejs.org builds its Linux binaries
-# on RHEL 8, so they need exactly the glibc 2.28 this image
-# has; Oracle Linux 8's own nodejs module is much older.
-RUN case "$(uname -m)" in \
-        x86_64) arch=x64 ;; \
-        aarch64) arch=arm64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && cd /tmp \
-    && curl -fsSL -O \
-        https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt \
-    && f=$(awk -v a="${arch}" \
-        '$2 ~ "^node-v.*-linux-" a "\\.tar\\.xz$" { print $2 }' \
-        SHASUMS256.txt) \
-    && curl -fsSL -O "https://nodejs.org/dist/latest-v24.x/${f}" \
-    && awk -v f="${f}" '$2 == f' SHASUMS256.txt | sha256sum -c - \
-    && tar -xJf "${f}" -C /usr/local --strip-components=1 \
-    && rm -f "${f}" SHASUMS256.txt /usr/local/CHANGELOG.md \
-        /usr/local/LICENSE /usr/local/README.md
+# Helper library the install scripts below source; every step
+# after this one reruns when it changes.
+COPY tools/lib.sh /opt/aisandbox/
+
+# nodejs.org builds its Linux binaries on RHEL 8, so they need
+# exactly the glibc 2.28 this image has; Oracle Linux 8's own
+# nodejs module is much older.
+COPY tools/install-node.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-node.sh
 
 # GitHub CLI (gh) from GitHub's own RPM repository (Oracle
 # Linux does not package gh at all).
@@ -294,214 +290,83 @@ RUN curl -fsSL -o /etc/yum.repos.d/gh-cli.repo \
     && dnf -y --setopt=install_weak_deps=False install gh \
     && dnf clean all
 
-# Go toolchain from the official go.dev binary tarball (gofmt
-# and go vet come with it): Oracle Linux 8's golang sits behind
-# dnf modularity and lags upstream.  The tarball name and
-# checksum come from the go.dev download metadata, resolved
-# like the Node.js step above.
-RUN case "$(uname -m)" in \
-        x86_64) arch=amd64 ;; \
-        aarch64) arch=arm64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && cd /tmp \
-    && json=$(curl -fsSL 'https://go.dev/dl/?mode=json') \
-    && f=$(printf '%s' "${json}" \
-        | jq -r --arg a "${arch}" '.[0].files[] \
-            | select(.os=="linux" and .arch==$a \
-                and .kind=="archive") | .filename') \
-    && s=$(printf '%s' "${json}" \
-        | jq -r --arg a "${arch}" '.[0].files[] \
-            | select(.os=="linux" and .arch==$a \
-                and .kind=="archive") | .sha256') \
-    && curl -fsSL -O "https://go.dev/dl/${f}" \
-    && printf '%s  %s\n' "${s}" "${f}" | sha256sum -c - \
-    && tar -xzf "${f}" -C /usr/local \
-    && rm -f "${f}" \
-    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
-    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+# Oracle Linux 8's golang sits behind dnf modularity and lags
+# upstream, so take the toolchain from go.dev; Ubuntu has a
+# current enough golang-go package.
+COPY tools/install-go.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-go.sh
 
-# npm-distributed agents, as in Containerfile.ubuntu.
-#
-# --allow-scripts approves the install scripts these packages
-# and their dependencies run: npm 11 only warns about scripts
-# not covered by allowScripts, but npm 12 will refuse to run
-# them, and "npm approve-scripts" cannot cover global installs.
-# The flag is a single argument and cannot be wrapped.
-RUN npm install -g \
-        --allow-scripts=@anthropic-ai/claude-code,@google/genai,opencode-ai,openclaw,protobufjs,tree-sitter-bash \
-        @anthropic-ai/claude-code \
-        @earendil-works/pi-coding-agent \
-        opencode-ai \
-        openclaw
+COPY tools/install-npm-agents.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-npm-agents.sh
 
-# goose (Block).  CONFIGURE=false skips the interactive setup
-# that the install script otherwise runs.  The released binary
-# needs glibc 2.28, exactly what this image has.
-RUN curl -fsSL \
-        https://github.com/block/goose/releases/download/stable/download_cli.sh \
-    | GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
+COPY tools/install-goose.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-goose.sh
+
+COPY tools/install-uv.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv.sh
 
 # aider, installed the way its own install script does (via uv)
 # but into system-wide locations so any user can run it.
-RUN curl -LsSf https://astral.sh/uv/install.sh \
-    | env UV_INSTALL_DIR=/usr/local/bin sh \
-    && env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        uv tool install --python 3.12 aider-chat \
-    && chmod -R a+rX /opt/uv-tools
+COPY tools/install-uv-tools.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv-tools.sh aider-chat
 
-# Linters and formatters distributed via npm, as in
-# Containerfile.ubuntu.
-RUN npm install -g \
-        @prantlf/jsonlint \
-        eslint \
-        htmlhint \
-        markdownlint-cli \
-        prettier \
-        stylelint \
-        typescript
+COPY tools/install-npm-linters.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-npm-linters.sh
 
-# Python-based tools installed as isolated uv tools with
-# system-wide commands, as in Containerfile.ubuntu, plus the
+# Python-based tools, as in Containerfile.ubuntu, plus the
 # linters that image takes from apt (black, codespell, flake8,
 # mypy, pylint): EPEL either lacks them or builds them for
 # Python 3.6.
-RUN env UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
-        sh -c 'for t in black codespell cpplint doc8 flake8 \
-            mypy pre-commit proselint pylint \
-            restructuredtext-lint ruff sqlfluff; do \
-                uv tool install --python 3.12 "${t}" || exit 1; \
-            done' \
-    && chmod -R a+rX /opt/uv-tools
+RUN /opt/aisandbox/install-uv-tools.sh \
+        black \
+        codespell \
+        cpplint \
+        doc8 \
+        flake8 \
+        mypy \
+        pre-commit \
+        proselint \
+        pylint \
+        restructuredtext-lint \
+        ruff \
+        sqlfluff
 
-# hadolint (Containerfile/Dockerfile linter); statically linked
-# amd64 binary.
-RUN curl -fsSL -o /usr/local/bin/hadolint \
-        https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
-    && chmod +x /usr/local/bin/hadolint
+COPY tools/install-hadolint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-hadolint.sh
 
-# golangci-lint, the standard Go meta-linter (bundles
-# staticcheck and friends); amd64 binary, verified and pinned
-# as in Containerfile.ubuntu.  Bump the pinned version here to
-# update.
-RUN v="2.12.2" \
-    && base="golangci-lint-${v}-linux-amd64" \
-    && url="https://github.com/golangci/golangci-lint/releases/download/v${v}" \
-    && cd /tmp \
-    && curl -fsSL -O "${url}/${base}.tar.gz" \
-    && curl -fsSL "${url}/golangci-lint-${v}-checksums.txt" \
-        | awk -v f="${base}.tar.gz" '$2 == f' \
-        | sha256sum -c - \
-    && tar -xzf "${base}.tar.gz" \
-    && mv "${base}/golangci-lint" /usr/local/bin/ \
-    && rm -rf "${base}" "${base}.tar.gz"
+COPY tools/install-golangci-lint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-golangci-lint.sh
 
-# actionlint (GitHub Actions workflow linter); amd64 binary,
-# pinned because the release asset name embeds the version.
-# Bump the pinned version here to update.
-RUN v="1.7.12" \
-    && f="actionlint_${v}_linux_amd64.tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://github.com/rhysd/actionlint/releases/download/v${v}/${f}" \
-    && tar -xzf "${f}" actionlint \
-    && mv actionlint /usr/local/bin/ \
-    && rm -f "${f}"
+COPY tools/install-actionlint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-actionlint.sh
 
-# gitleaks (secret scanner, to keep credentials out of
-# commits); amd64 binary, pinned like actionlint above.
-RUN v="8.30.1" \
-    && f="gitleaks_${v}_linux_x64.tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://github.com/gitleaks/gitleaks/releases/download/v${v}/${f}" \
-    && tar -xzf "${f}" gitleaks \
-    && mv gitleaks /usr/local/bin/ \
-    && rm -f "${f}"
+COPY tools/install-gitleaks.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-gitleaks.sh
 
-# mikefarah's yq (Go YAML processor); amd64 binary, like the
-# hadolint step above.
-RUN curl -fsSL -o /usr/local/bin/yq \
-        https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
-    && chmod +x /usr/local/bin/yq
+COPY tools/install-yq.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yq.sh
 
-# shfmt (shell formatter), which Containerfile.ubuntu takes
-# from apt; not packaged for Oracle Linux 8, so use the
-# statically linked release binary, pinned like actionlint
-# above.
-RUN v="3.13.1" \
-    && curl -fsSL -o /usr/local/bin/shfmt \
-        "https://github.com/mvdan/sh/releases/download/v${v}/shfmt_v${v}_linux_amd64" \
-    && chmod +x /usr/local/bin/shfmt
+# shfmt and shunit2, which Containerfile.ubuntu takes from apt;
+# neither is packaged for Oracle Linux 8.
+COPY tools/install-shfmt.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-shfmt.sh
 
-# shunit2 shell-script unit-test framework (Apache License
-# 2.0), which Containerfile.ubuntu takes from apt; not packaged
-# for Oracle Linux 8, so install the single upstream script,
-# pinned like actionlint above.
-RUN v="2.1.8" \
-    && curl -fsSL -o /usr/local/bin/shunit2 \
-        "https://raw.githubusercontent.com/kward/shunit2/v${v}/shunit2" \
-    && chmod 755 /usr/local/bin/shunit2
+COPY tools/install-shunit2.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-shunit2.sh
 
-# Rust via rustup, installed system-wide and read-only.  The
-# default profile includes clippy (linter) and rustfmt.  Only
-# RUSTUP_HOME is exported: CARGO_HOME stays at its ~/.cargo
-# default so per-user cargo builds can write their registry.
-RUN curl -fsSL https://sh.rustup.rs \
-    | env RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust \
-        sh -s -- -y --no-modify-path --profile default \
-    && chmod -R a+rX /opt/rust
+COPY tools/install-rust.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-rust.sh
 ENV RUSTUP_HOME=/opt/rust \
     PATH=/opt/rust/bin:${PATH}
 
-# Julia from the official julialang.org binary tarball, as in
-# Containerfile.ubuntu; verified against the release's
-# published checksum file and pinned because the URLs embed the
-# version (the directory component is the major.minor prefix).
-# Bump the pinned version here to update.
-RUN v="1.12.6" \
-    && case "$(uname -m)" in \
-        x86_64) arch=x64 ;; \
-        aarch64) arch=aarch64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && f="julia-${v}-linux-$(uname -m).tar.gz" \
-    && cd /tmp \
-    && curl -fsSL -O \
-        "https://julialang-s3.julialang.org/bin/linux/${arch}/${v%.*}/${f}" \
-    && curl -fsSL \
-        "https://julialang-s3.julialang.org/bin/checksums/julia-${v}.sha256" \
-        | awk -v f="${f}" '$2 == f' \
-        | sha256sum -c - \
-    && tar -xzf "${f}" -C /opt \
-    && rm -f "${f}" \
-    && ln -s "/opt/julia-${v}/bin/julia" /usr/local/bin/julia
+COPY tools/install-julia.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-julia.sh
 
-# AWS CLI v2 from the official installer zip, as in
-# Containerfile.ubuntu.  The zip name embeds the architecture
-# exactly as uname -m reports it (x86_64, aarch64), so both
-# amd64 and arm64 work without a case statement.
-RUN cd /tmp \
-    && f="awscli-exe-linux-$(uname -m).zip" \
-    && curl -fsSL -O "https://awscli.amazonaws.com/${f}" \
-    && unzip -q "${f}" \
-    && ./aws/install \
-    && rm -rf "${f}" aws
+COPY tools/install-awscli.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-awscli.sh
 
-# Session Manager plugin for the AWS CLI
-# (session-manager-plugin, needed by "aws ssm start-session"),
-# from AWS's official .rpm.  The URL's directory component
-# names the architecture, so map uname -m to it like the
-# Node.js step above.
-RUN case "$(uname -m)" in \
-        x86_64) arch=linux_64bit ;; \
-        aarch64) arch=linux_arm64 ;; \
-        *) echo "unsupported architecture: $(uname -m)"; exit 1 ;; \
-    esac \
-    && curl -fsSL -o /tmp/session-manager-plugin.rpm \
-        "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/${arch}/session-manager-plugin.rpm" \
-    && rpm -i /tmp/session-manager-plugin.rpm \
-    && rm -f /tmp/session-manager-plugin.rpm
+COPY tools/install-session-manager-plugin.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-session-manager-plugin.sh
 
 # Terraform from HashiCorp's RPM repository, using the .repo
 # file HashiCorp publishes for RHEL-family distributions (its

@@ -36,6 +36,18 @@ Files
     tools where Oracle Linux packaging allows (its header lists what is
     left out).
 
+``tools/``
+    Install scripts shared by the Containerfiles, one per tool that is
+    installed the same way in every flavor (Node.js, the npm- and
+    uv-distributed tools, the release binaries, Rust, Julia, the AWS
+    CLI).  Each script carries that tool's notes and version pin, so a
+    version is bumped in one place for all flavors; ``lib.sh`` holds the
+    architecture and checksum helpers they share.  The Containerfiles
+    copy each script to ``/opt/aisandbox`` in the image and run it, one
+    ``COPY`` per step so editing a script reruns only that step and the
+    ones after it.  Distribution package and repository setup stays in
+    the Containerfiles.
+
 ``start-aisandbox``
     Starts the sandbox container detached in the background with the
     appropriate mounts and environment.
@@ -94,8 +106,17 @@ selects another ``Containerfile.<flavor>`` and tags the image
 
     ./update-aisandbox oracle
 
-The Kiro CLI step installs an amd64-only .deb package.  On arm64 hosts,
-replace that step with the zip noted in the Containerfile.ubuntu comments.
+Both images build on x86_64 and aarch64: the ``tools/`` scripts pick the
+release built for the architecture they run on, and fail the build rather
+than install a binary that cannot run.  Two steps in
+``Containerfile.ubuntu`` are still amd64-only, so the Ubuntu image needs
+them replaced to build on arm64:
+
+* the Kiro CLI .deb, for which upstream publishes an arm64 zip instead
+  (the URL is in the Containerfile.ubuntu comments)
+* the Oracle Instant Client zips, which Oracle publishes for arm64 only
+  under version-numbered URLs rather than the permanent latest-version
+  ones used here
 
 Starting a container
 ====================
