@@ -64,8 +64,10 @@ ENV LANG=C.UTF-8
 #   collectd (no init system here, so run it in the foreground:
 #   "collectd -f -C <config>"), and perf;
 # - document and image handling: pandoc, poppler-utils
-#   (pdftotext and friends, so agents can read PDFs), graphviz,
-#   and imagemagick;
+#   (pdftotext and friends, so agents can read PDFs),
+#   ghostscript (gs plus the ps2pdf/pdf2ps converters, which
+#   imagemagick also calls for PostScript and PDF input),
+#   graphviz, and imagemagick;
 # - benchmarking and code statistics: hyperfine and cloc, plus
 #   entr to watch files and rerun commands;
 # - database client development files: libmysqlclient-dev
@@ -115,6 +117,7 @@ RUN apt-get update \
         fop \
         fzf \
         gdb \
+        ghostscript \
         git \
         git-lfs \
         gnupg \
@@ -479,6 +482,21 @@ RUN key=/etc/apt/keyrings/salt-archive-keyring.pgp \
         salt-minion \
         salt-ssh \
     && rm -rf /var/lib/apt/lists/*
+
+# CockroachDB, from the upstream binary tarball: it is not
+# packaged by any distribution used here, and Cockroach Labs
+# publishes the same binaries for every Linux.  The binary is
+# about 320 MB.  The script has the command that starts a
+# single-node cluster.
+COPY tools/install-cockroachdb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-cockroachdb.sh
+
+# YugabyteDB, from the upstream binary tarball, for the same
+# reason as CockroachDB above.  It is by far the largest thing
+# in this image: the unpacked release is about 1.4 GB.  The
+# script has the commands that start and stop a single node.
+COPY tools/install-yugabytedb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yugabytedb.sh
 
 # Rename the stock "ubuntu" user (uid 1000) after the invoking
 # host user, and give it the same login shell as on the host so

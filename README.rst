@@ -25,6 +25,15 @@ Containerfile.ubuntu for the full list).  Also included are the Rust and Go
 toolchains, meson and ninja, the docutils rst2* tools and sphinx, and the
 DocBook toolchain the PostgreSQL documentation build requires.
 
+Both images also carry database servers and client development files:
+PostgreSQL, MySQL, CockroachDB, YugabyteDB, and SQLite, along with
+unixODBC and the Oracle client libraries and headers (the Oracle variant
+has a full ``ORACLE_HOME`` instead of the Instant Client; see `Oracle
+variant`_).  There is no init system in the container, so none of them
+starts on its own; the command that starts each one is in the comment
+above its install step, or in its ``tools/`` script.  YugabyteDB is the
+largest single component of either image, at about 1.4 GB unpacked.
+
 Files
 =====
 

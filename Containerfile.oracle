@@ -151,6 +151,7 @@ RUN : > /etc/yum/vars/ociregion \
         gcc \
         gcc-c++ \
         gdb \
+        ghostscript \
         git \
         git-lfs \
         glibc-devel \
@@ -419,6 +420,22 @@ RUN curl -fsSL -o /etc/yum.repos.d/salt.repo \
         salt-minion \
         salt-ssh \
     && dnf clean all
+
+# CockroachDB, from the upstream binary tarball: it is not
+# packaged by any distribution used here, and Cockroach Labs
+# publishes the same binaries for every Linux.  The binary is
+# about 320 MB.  The script has the command that starts a
+# single-node cluster.
+COPY tools/install-cockroachdb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-cockroachdb.sh
+
+# YugabyteDB, from the upstream binary tarball, for the same
+# reason as CockroachDB above.  It is by far the largest thing
+# this file adds to the base image: the unpacked release is
+# about 1.4 GB.  The script has the commands that start and
+# stop a single node.
+COPY tools/install-yugabytedb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yugabytedb.sh
 
 # Unlike Containerfile.ubuntu, which renames the stock ubuntu
 # user, this base image has no uid-1000 user, so create one
