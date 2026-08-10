@@ -61,9 +61,20 @@ else
     exit 1
 fi
 
-# The Containerfiles live next to this script.
+# The Containerfiles live next to this script, and so does the
+# build context.  Follow a symlink back to the real script first,
+# so both are still found when the script is reached through a
+# symlink in PATH.
 CONTAINERFILE="Containerfile.${FLAVOR}"
-cd "$(dirname "$0")"
+SELF="$0"
+while [ -L "${SELF}" ]; do
+    LINK="$(readlink "${SELF}")"
+    case "${LINK}" in
+        /*) SELF="${LINK}" ;;
+        *) SELF="$(dirname "${SELF}")/${LINK}" ;;
+    esac
+done
+cd "$(dirname "${SELF}")"
 if [ ! -f "${CONTAINERFILE}" ]; then
     echo "error: no ${CONTAINERFILE} in $(pwd); available:" \
         Containerfile.* >&2

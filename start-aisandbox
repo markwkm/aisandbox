@@ -44,8 +44,21 @@
 
 set -eu
 
+# Follow a symlink back to the real script before taking its
+# directory, so the Containerfiles next to it are still found
+# when the script is reached through a symlink in PATH.
+SELF="$0"
+while [ -L "${SELF}" ]; do
+    LINK="$(readlink "${SELF}")"
+    case "${LINK}" in
+        /*) SELF="${LINK}" ;;
+        *) SELF="$(dirname "${SELF}")/${LINK}" ;;
+    esac
+done
+DIR="$(dirname "${SELF}")"
+
 FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
-if [ $# -ge 1 ] && [ -f "$(dirname "$0")/Containerfile.${1}" ]; then
+if [ $# -ge 1 ] && [ -f "${DIR}/Containerfile.${1}" ]; then
     FLAVOR="$1"
     shift
 fi

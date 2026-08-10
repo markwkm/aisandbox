@@ -78,6 +78,16 @@ Files
     ``Containerfile.ubuntu`` unless a flavor argument names another
     variant.
 
+The scripts look for the Containerfiles, and for each other, next to
+themselves, following a symlink back to the real script first.  They can
+therefore be symlinked into a directory on ``PATH``::
+
+    ln -s ~/.local/src/aisandbox/start-agent ~/.local/bin/start-agent
+    ln -s ~/.local/src/aisandbox/open-shell ~/.local/bin/open-shell
+
+Copying them there instead does not work, since a copy has no way back
+to the Containerfiles.
+
 Building the image
 ==================
 
