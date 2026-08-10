@@ -1,0 +1,232 @@
+#!/bin/sh
+# Start an AI agent in the aisandbox container, in the working
+# directory it is invoked from.
+#
+# Usage: start-agent [-h] [-k | -s] [flavor] [agent [args ...]]
+#   With no arguments kiro-cli is started.  Any other agent
+#   installed in the image is started by naming it (e.g.
+#   "start-agent claude"), and anything after its name is passed
+#   to it.
+#
+# Starts the container with start-aisandbox first when it is not
+# running already, then enters it with open-shell, changes to the
+# directory this script was invoked from, and replaces the shell
+# with the agent.  The container mounts the source directory at
+# the same absolute path on both sides, so a path under it exists
+# inside the container as well.  A directory outside that mount
+# does not, and the script exits saying so rather than start the
+# agent somewhere else.
+#
+# A first argument naming a Containerfile flavor next to this
+# script selects it, like start-aisandbox (e.g. "start-agent
+# oracle claude"), and takes precedence over AISANDBOX_FLAVOR.
+# The flavor is checked before the agent name, so an agent can
+# never be mistaken for a flavor.
+#
+# Options come before the flavor and the agent, since everything
+# from the agent name on belongs to the agent.  Use -- to run an
+# agent whose name starts with a dash.
+#
+# Options:
+#   -h, --help  print the usage above and exit
+#   -k, --keep  leave the container running on exit, even when
+#               this invocation started it
+#   -s, --stop  stop the container on exit when nothing else is
+#               using it, even when it was already running
+#
+# A container this invocation had to start is stopped again when
+# the agent exits and no other session is using it, so a sandbox
+# started only to run an agent does not outlive it.  A container
+# that was already running is left alone unless -s says
+# otherwise, since it may have been started for something else
+# (the oracle flavor's database serves the host whether a session
+# is attached or not).
+#
+# Environment:
+#   AISANDBOX_FLAVOR  Containerfile variant to use
+#                     (default: ubuntu)
+#   AISANDBOX_NAME    container name (default: aisandbox for the
+#                     ubuntu flavor, aisandbox-<flavor> for the
+#                     others)
+#   AISANDBOX_SRC     source directory start-aisandbox mounts,
+#                     when this script has to start the container
+#                     (default: ~/.local/src)
+
+set -eu
+
+# Follow a symlink back to the real script before taking its
+# directory, so the script still finds the Containerfiles and its
+# sibling scripts when it is reached through a symlink in PATH.
+SELF="$0"
+while [ -L "${SELF}" ]; do
+    LINK="$(readlink "${SELF}")"
+    case "${LINK}" in
+        /*) SELF="${LINK}" ;;
+        *) SELF="$(dirname "${SELF}")/${LINK}" ;;
+    esac
+done
+DIR="$(dirname "${SELF}")"
+
+usage() {
+    cat <<'EOF'
+usage: start-agent [-h] [-k | -s] [flavor] [agent [args ...]]
+
+Run an agent in the aisandbox container, in the directory
+start-agent is invoked from, starting the container first when it
+is not running already.  With no agent named kiro-cli is started,
+and anything after the agent name is passed to the agent.  A
+flavor argument names a Containerfile variant next to this
+script and is looked for before the agent name.
+
+Options:
+  -h, --help  print this help and exit
+  -k, --keep  leave the container running on exit, even when
+              this invocation started it
+  -s, --stop  stop the container on exit when nothing else is
+              using it, even when it was already running
+
+A container this invocation had to start is stopped again when
+the agent exits and no other session is using it.  A container
+that was already running is left alone unless -s says otherwise.
+
+Environment:
+  AISANDBOX_FLAVOR  Containerfile variant to use
+                    (default: ubuntu)
+  AISANDBOX_NAME    container name (default: aisandbox for the
+                    ubuntu flavor, aisandbox-<flavor> for the
+                    others)
+  AISANDBOX_SRC     source directory start-aisandbox mounts, when
+                    this script has to start the container
+                    (default: ~/.local/src)
+EOF
+}
+
+# Empty means the default: stop only a container this invocation
+# started.
+STOP=""
+while [ $# -ge 1 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -k|--keep) STOP="no" ;;
+        -s|--stop) STOP="yes" ;;
+        --) shift; break ;;
+        -?*)
+            echo "error: unknown option '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+        *) break ;;
+    esac
+    shift
+done
+
+FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
+if [ $# -ge 1 ] && [ -f "${DIR}/Containerfile.${1}" ]; then
+    FLAVOR="$1"
+    shift
+fi
+if [ "${FLAVOR}" = "ubuntu" ]; then
+    NAME="${AISANDBOX_NAME:-aisandbox}"
+else
+    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
+fi
+
+if [ $# -eq 0 ]; then
+    set -- kiro-cli
+fi
+
+if command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+elif command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+else
+    echo "error: neither podman nor docker is installed" >&2
+    exit 1
+fi
+
+# start-aisandbox is a no-op on an existing container, but it
+# says so on stderr, so ask first and stay quiet when there is
+# nothing to start.
+if "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    STOP="${STOP:-no}"
+else
+    "${DIR}/start-aisandbox" "${FLAVOR}"
+    STOP="${STOP:-yes}"
+fi
+
+# Count the sessions entered from outside the container.  Both
+# engines run an exec session inside the container's PID
+# namespace while its parent (conmon, or the daemon's shim) stays
+# outside, and the kernel reports a parent it cannot see in the
+# namespace as PPid 0.  Nothing else has that: PID 1, the idle
+# sleep, and whatever the image itself starts (the oracle
+# flavor's database) all descend from PID 1, and orphans are
+# reparented to it.  The count includes the exec session doing
+# the counting, so "nothing else is using it" means 1.
+sessions() {
+    "${ENGINE}" exec "${NAME}" sh -c '
+        n=0
+        for p in /proc/[0-9]*; do
+            [ "${p}" = "/proc/1" ] && continue
+            ppid=""
+            while read -r key value; do
+                if [ "${key}" = "PPid:" ]; then
+                    ppid="${value}"
+                    break
+                fi
+            done < "${p}/status" 2>/dev/null || continue
+            [ "${ppid}" = "0" ] && n=$((n + 1))
+        done
+        echo "${n}"
+    '
+}
+
+# The working directory and the agent are handed to a shell
+# inside the container as arguments rather than pasted into the
+# command, so paths and arguments with spaces in them survive.
+# Both are checked before anything runs, since a missing mount
+# would otherwise leave the agent running in the container's
+# default directory, and a missing agent would report itself as
+# a bare "not found" from the shell.  The final exec replaces
+# that shell with the agent so its signals and exit status pass
+# straight through.
+INNER='
+    cwd="${1}"
+    shift
+    if [ ! -d "${cwd}" ]; then
+        echo "error: ${cwd} does not exist in the container;" \
+            "it is outside the mounted source directory" >&2
+        exit 1
+    fi
+    if ! command -v "${1}" >/dev/null 2>&1; then
+        echo "error: ${1} is not installed in the container" >&2
+        exit 1
+    fi
+    cd "${cwd}" || exit 1
+    exec "$@"
+'
+
+# With nothing left to do afterwards, hand the terminal over for
+# good; the agent's exit status is then this script's own.
+if [ "${STOP}" = "no" ]; then
+    exec "${DIR}/open-shell" "${FLAVOR}" sh -c "${INNER}" \
+        sh "$(pwd)" "$@"
+fi
+
+STATUS=0
+"${DIR}/open-shell" "${FLAVOR}" sh -c "${INNER}" sh "$(pwd)" "$@" \
+    || STATUS=$?
+
+# A count that is missing or not a number means the container is
+# gone or unreachable, which is nothing to stop either way.
+COUNT="$(sessions 2>/dev/null)" || COUNT=""
+case "${COUNT}" in
+    ''|*[!0-9]*) ;;
+    *)
+        if [ "${COUNT}" -le 1 ]; then
+            "${DIR}/stop-aisandbox" "${FLAVOR}"
+        fi
+        ;;
+esac
+
+exit "${STATUS}"

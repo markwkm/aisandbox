@@ -65,6 +65,10 @@ Files
     Opens an interactive shell, or runs a command, in the running sandbox
     container.
 
+``start-agent``
+    Runs an agent in the sandbox container, in the directory it is invoked
+    from, starting the container first when it is not running already.
+
 ``stop-aisandbox``
     Stops the sandbox container, which removes itself.
 
@@ -157,6 +161,48 @@ install extra packages::
     ./open-shell -r apt-get install -y strace
 
 and ``-u`` runs as any other container user.
+
+Starting an agent
+=================
+
+``start-agent`` goes from a project directory on the host to an agent
+running in that same directory inside the sandbox in one step::
+
+    cd ~/.local/src/someproject
+    ~/.local/src/aisandbox/start-agent
+
+It starts the container with ``start-aisandbox`` when it is not running
+already, enters the directory it was invoked from, and runs ``kiro-cli``
+there.  Naming an agent runs that one instead, and anything after the
+name is passed to it::
+
+    start-agent claude
+    start-agent claude --version
+
+The directory has to be inside the mounted source tree, that being the
+host path the container carries under its own name.  Anywhere else the
+script says so and stops, rather than start the agent in a directory
+other than the one asked for.  A flavor argument selects a variant as it
+does for the other scripts, and is looked for before the agent name, so
+an agent is never mistaken for a flavor::
+
+    start-agent oracle claude
+
+A container ``start-agent`` had to start is stopped again when the agent
+exits, as long as no other shell or agent session is still attached to
+it, so a sandbox started only to run an agent does not outlive it.  A
+container that was already running is left alone, since it may have been
+started for something else: the oracle flavor's database serves the host
+whether a session is attached or not.  ``-k`` keeps a container
+this invocation started, and ``-s`` stops an already running one once
+nothing else is using it::
+
+    start-agent -k claude
+    start-agent -s claude
+
+Options come before the flavor and the agent name, since everything from
+the agent name on is passed to the agent.  ``start-agent --help`` prints
+the usage.
 
 Stop the sandbox when done::
 
