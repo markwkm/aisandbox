@@ -1,8 +1,10 @@
 #!/bin/sh
 # Open an interactive shell, or run a command, in the aisandbox
-# container started by start-aisandbox.
+# container, starting the container first when it is not running
+# already.
 #
-# Usage: open-shell [flavor] [-r | -u user] [command [args ...]]
+# Usage: open-shell [flavor] [-k | -s] [-r | -u user]
+#                   [command [args ...]]
 #   With no arguments an interactive login shell is started.
 #
 # A first argument naming a Containerfile flavor next to this
@@ -12,9 +14,21 @@
 # options is the command to run.
 #
 # Options:
+#   -k       leave the container running on exit, even when this
+#            invocation started it
+#   -s       stop the container on exit when nothing else is
+#            using it, even when it was already running
 #   -r       run as root inside the container
 #   -u user  run as the given container user (e.g. -u oracle
 #            for the Oracle variant's database user)
+#
+# A container this invocation had to start is stopped again when
+# the shell exits and no other session is using it, so a sandbox
+# started only to run one command does not outlive it.  A
+# container that was already running is left alone unless -s says
+# otherwise, since it may have been started for something else
+# (the oracle flavor's database serves the host whether a session
+# is attached or not).
 #
 # Shells start in the host's current directory when the
 # container can see it, which it can for anything under the
@@ -35,6 +49,9 @@
 #   AISANDBOX_NAME    container name (default: aisandbox for
 #                     the ubuntu flavor, aisandbox-<flavor> for
 #                     the others)
+#   AISANDBOX_SRC     source directory start-aisandbox mounts,
+#                     when this script has to start the
+#                     container (default: ~/.local/src)
 
 set -eu
 
@@ -69,13 +86,19 @@ if [ "${FLAVOR}" = "ubuntu" ]; then
 else
     ASUSER="--user 1000"
 fi
-while getopts ru: opt; do
+
+# Empty means the default: stop only a container this invocation
+# started.
+STOP=""
+while getopts kru:s opt; do
     case "${opt}" in
+        k) STOP="no" ;;
         r) ASUSER="--user root" ;;
+        s) STOP="yes" ;;
         u) ASUSER="--user ${OPTARG}" ;;
         *)
-            echo "usage: open-shell [flavor] [-r | -u user]" \
-                "[command [args ...]]" >&2
+            echo "usage: open-shell [flavor] [-k | -s]" \
+                "[-r | -u user] [command [args ...]]" >&2
             exit 1
             ;;
     esac
@@ -91,11 +114,42 @@ else
     exit 1
 fi
 
-if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
-    echo "error: container '${NAME}' is not running;" \
-        "start it with start-aisandbox" >&2
-    exit 1
+# start-aisandbox is a no-op on an existing container, but it
+# says so on stderr, so ask first and stay quiet when there is
+# nothing to start.
+if "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
+    STOP="${STOP:-no}"
+else
+    "${DIR}/start-aisandbox" "${FLAVOR}"
+    STOP="${STOP:-yes}"
 fi
+
+# Count the sessions entered from outside the container.  Both
+# engines run an exec session inside the container's PID
+# namespace while its parent (conmon, or the daemon's shim) stays
+# outside, and the kernel reports a parent it cannot see in the
+# namespace as PPid 0.  Nothing else has that: PID 1, the idle
+# sleep, and whatever the image itself starts (the oracle
+# flavor's database) all descend from PID 1, and orphans are
+# reparented to it.  The count includes the exec session doing
+# the counting, so "nothing else is using it" means 1.
+sessions() {
+    "${ENGINE}" exec "${NAME}" sh -c '
+        n=0
+        for p in /proc/[0-9]*; do
+            [ "${p}" = "/proc/1" ] && continue
+            ppid=""
+            while read -r key value; do
+                if [ "${key}" = "PPid:" ]; then
+                    ppid="${value}"
+                    break
+                fi
+            done < "${p}/status" 2>/dev/null || continue
+            [ "${ppid}" = "0" ] && n=$((n + 1))
+        done
+        echo "${n}"
+    '
+}
 
 # Both engines fail an exec whose working directory does not
 # exist in the container, so use the host's current directory
@@ -122,8 +176,32 @@ fi
 
 # Allocate a tty only when we actually have one, so commands can
 # also be run from pipes and scripts.  ${ASUSER} is expanded
-# unquoted on purpose: it is either empty or "--user root".
+# unquoted on purpose: it is either empty or "--user <user>".
 if [ -t 0 ]; then
-    exec "${ENGINE}" exec ${ASUSER} -w "${WD}" -it "${NAME}" "$@"
+    set -- exec ${ASUSER} -w "${WD}" -it "${NAME}" "$@"
+else
+    set -- exec ${ASUSER} -w "${WD}" -i "${NAME}" "$@"
 fi
-exec "${ENGINE}" exec ${ASUSER} -w "${WD}" -i "${NAME}" "$@"
+
+# With nothing left to do afterwards, hand the terminal over for
+# good; the command's exit status is then this script's own.
+if [ "${STOP}" = "no" ]; then
+    exec "${ENGINE}" "$@"
+fi
+
+STATUS=0
+"${ENGINE}" "$@" || STATUS=$?
+
+# A count that is missing or not a number means the container is
+# gone or unreachable, which is nothing to stop either way.
+COUNT="$(sessions 2>/dev/null)" || COUNT=""
+case "${COUNT}" in
+    ''|*[!0-9]*) ;;
+    *)
+        if [ "${COUNT}" -le 1 ]; then
+            "${DIR}/stop-aisandbox" "${FLAVOR}"
+        fi
+        ;;
+esac
+
+exit "${STATUS}"

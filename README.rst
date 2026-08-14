@@ -62,8 +62,9 @@ Files
     appropriate mounts and environment.
 
 ``open-shell``
-    Opens an interactive shell, or runs a command, in the running sandbox
-    container.
+    Opens an interactive shell, or runs a command, in the sandbox
+    container, starting the container first when it is not running
+    already.
 
 ``start-agent``
     Runs an agent in the sandbox container, in the directory it is invoked
@@ -172,6 +173,19 @@ install extra packages::
 
 and ``-u`` runs as any other container user.
 
+``open-shell`` starts the container itself when it is not running
+already, and stops it again on exit once no other shell or agent session
+is still attached, so ``start-aisandbox`` is only needed to keep a
+sandbox running past its last shell, or to mount a source directory
+other than the default.  A container that was already running is left
+alone, since it may have been started for something else: the oracle
+flavor's database serves the host whether a session is attached or not.
+``-k`` keeps a container this invocation started, and ``-s`` stops an
+already running one once nothing else is using it::
+
+    ./open-shell -k
+    ./open-shell -s
+
 Starting an agent
 =================
 
@@ -201,11 +215,10 @@ an agent is never mistaken for a flavor::
 A container ``start-agent`` had to start is stopped again when the agent
 exits, as long as no other shell or agent session is still attached to
 it, so a sandbox started only to run an agent does not outlive it.  A
-container that was already running is left alone, since it may have been
-started for something else: the oracle flavor's database serves the host
-whether a session is attached or not.  ``-k`` keeps a container
-this invocation started, and ``-s`` stops an already running one once
-nothing else is using it::
+container that was already running is left alone.  ``open-shell`` does
+the work, and ``start-agent`` only passes its ``-k`` and ``-s`` on, which
+keep a container this invocation started and stop an already running one
+once nothing else is using it::
 
     start-agent -k claude
     start-agent -s claude
