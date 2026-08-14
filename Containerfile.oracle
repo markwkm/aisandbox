@@ -96,7 +96,12 @@ USER root
 # - clang-tools-extra carries clangd (the C/C++ language
 #   server) together with clang-tidy and clang-format, which
 #   Ubuntu packages separately (dnf resolves the package from
-#   the llvm-toolset module's default stream on its own);
+#   the llvm-toolset module's default stream on its own); it
+#   pulls in clang-libs but not the clang driver, which pgxs
+#   needs to emit the LLVM bitcode a PostgreSQL server built
+#   with --with-llvm asks for, so clang is named as well
+#   (Containerfile.ubuntu gets the driver from apt without
+#   naming it);
 # - sqlite provides the sqlite3 command;
 # - fd-find installs /usr/bin/fd directly (no fdfind rename);
 # - perf is the real binary (no kernel-version wrapper);
@@ -131,6 +136,7 @@ RUN : > /etc/yum/vars/ociregion \
         bison \
         bzip2 \
         ca-certificates \
+        clang \
         clang-tools-extra \
         cloc \
         cmake \
