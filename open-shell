@@ -16,6 +16,12 @@
 #   -u user  run as the given container user (e.g. -u oracle
 #            for the Oracle variant's database user)
 #
+# Shells start in the host's current directory when the
+# container can see it, which it can for anything under the
+# mounted source tree, since that is mounted at the same
+# absolute path on both sides.  Otherwise they start in the
+# container's own working directory (the mounted source tree).
+#
 # Shells default to the uid-1000 agent user every flavor's
 # image builds: the ubuntu image's default user already is it,
 # while the other flavors' images default to a service user
@@ -91,6 +97,19 @@ if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Both engines fail an exec whose working directory does not
+# exist in the container, so use the host's current directory
+# only after checking for it inside, and fall back to the
+# working directory the container itself was started with.
+WD="$(pwd)"
+if ! "${ENGINE}" exec "${NAME}" sh -c 'test -d "${1}"' sh "${WD}" \
+    >/dev/null 2>&1
+then
+    WD="$("${ENGINE}" container inspect \
+        --format '{{.Config.WorkingDir}}' "${NAME}")"
+    [ -n "${WD}" ] || WD="/"
+fi
+
 # Start the same shell used on the host when the image has it,
 # falling back to zsh then bash.
 if [ $# -eq 0 ]; then
@@ -105,6 +124,6 @@ fi
 # also be run from pipes and scripts.  ${ASUSER} is expanded
 # unquoted on purpose: it is either empty or "--user root".
 if [ -t 0 ]; then
-    exec "${ENGINE}" exec ${ASUSER} -it "${NAME}" "$@"
+    exec "${ENGINE}" exec ${ASUSER} -w "${WD}" -it "${NAME}" "$@"
 fi
-exec "${ENGINE}" exec ${ASUSER} -i "${NAME}" "$@"
+exec "${ENGINE}" exec ${ASUSER} -w "${WD}" -i "${NAME}" "$@"
