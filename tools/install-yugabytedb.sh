@@ -17,9 +17,18 @@
 # the build upstream makes for EL8, so either flavor can run
 # them.
 # post_install.sh is the setup step upstream's own install
-# instructions run from the unpacked directory.  The
-# unversioned /opt/yugabyte symlink gives the commands below a
-# stable path, as /opt/oracle/instantclient does in
+# instructions run from the unpacked directory.  It is removed
+# once it has run, because yugabyted runs it again on the first
+# start of every new --base_dir and treats a failure as fatal.
+# That re-run rewrites files under the unpacked tree, including
+# openssl-config/fipsmodule.cnf, which fails as soon as the tree
+# is not writable by the user running yugabyted; under
+# start-aisandbox's --userns=keep-id the build time ownership
+# below does not map to that user.  yugabyted skips the step
+# when the script is absent, treating it as a development tree.
+#
+# The unversioned /opt/yugabyte symlink gives the commands below
+# a stable path, as /opt/oracle/instantclient does in
 # Containerfile.ubuntu.
 #
 # The unpacked tree is handed to the uid-1000 agent user, so it
@@ -63,6 +72,7 @@ curl -fsSL -O "${base}/${f}"
 tar -xzf "${f}" -C /opt
 rm -f "${f}"
 "/opt/yugabyte-${v}/bin/post_install.sh"
+rm -f "/opt/yugabyte-${v}/bin/post_install.sh"
 chmod -R a+rX "/opt/yugabyte-${v}"
 chown -R 1000:1000 "/opt/yugabyte-${v}"
 ln -s "/opt/yugabyte-${v}" /opt/yugabyte
