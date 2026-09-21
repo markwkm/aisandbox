@@ -141,6 +141,7 @@ for d in \
     .config/opencode \
     .local/share/opencode \
     .local/state/opencode \
+    .local/state/goose \
     .cache/opencode \
     .openclaw \
     .config/goose \
