@@ -11,6 +11,7 @@ variant`_ below).
 Agents installed (command names in parentheses):
 
 * Claude Code (``claude``)
+* Codex CLI (``codex``)
 * Kiro CLI (``kiro-cli``)
 * opencode (``opencode``)
 * OpenClaw (``openclaw``)

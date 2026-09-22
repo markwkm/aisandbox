@@ -5,8 +5,8 @@
 # goose and aider install scripts target Debian/Ubuntu first.
 #
 # Agents installed (command names in parentheses):
-#   Claude Code (claude), Kiro CLI (kiro-cli), opencode, openclaw,
-#   goose, pi, aider
+#   Claude Code (claude), Codex CLI (codex), Kiro CLI (kiro-cli),
+#   opencode, openclaw, goose, pi, aider
 #
 # Steps that install a tool the same way in every flavor run a
 # script from tools/, which carries that tool's own notes and

@@ -120,6 +120,8 @@ set -- -v "${SRC}:${SRC}" "$@"
 #   .aws                        AWS config, credentials, and SSO
 #                               token cache (Kiro/Bedrock)
 #   .claude                     Claude Code state and credentials
+#   .codex                      Codex CLI config, credentials, and
+#                               sessions
 #   .kiro                       Kiro global config (hardcoded path)
 #   .local/share/kiro-cli       Kiro CLI data
 #   .opencode                   opencode config
@@ -135,6 +137,7 @@ set -- -v "${SRC}:${SRC}" "$@"
 for d in \
     .aws \
     .claude \
+    .codex \
     .kiro \
     .local/share/kiro-cli \
     .opencode \

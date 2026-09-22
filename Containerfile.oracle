@@ -12,7 +12,8 @@
 # the package set below.
 #
 # Agents installed (command names in parentheses):
-#   Claude Code (claude), opencode, openclaw, goose, pi, aider
+#   Claude Code (claude), Codex CLI (codex), opencode, openclaw,
+#   goose, pi, aider
 #
 # Steps that install a tool the same way in every flavor run a
 # script from tools/, shared with Containerfile.ubuntu; each
