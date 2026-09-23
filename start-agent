@@ -56,8 +56,9 @@
 set -eu
 
 # Follow a symlink back to the real script before taking its
-# directory, so the script still finds the Containerfiles and its
-# sibling scripts when it is reached through a symlink in PATH.
+# directory, so the script still finds the shared library, the
+# Containerfiles, and its sibling scripts when it is reached
+# through a symlink in PATH.
 SELF="$0"
 while [ -L "${SELF}" ]; do
     LINK="$(readlink "${SELF}")"
@@ -67,6 +68,8 @@ while [ -L "${SELF}" ]; do
     esac
 done
 DIR="$(dirname "${SELF}")"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+. "${DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
@@ -121,11 +124,8 @@ while [ $# -ge 1 ]; do
     shift
 done
 
-FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
-if [ $# -ge 1 ] && [ -f "${DIR}/Containerfile.${1}" ]; then
-    FLAVOR="$1"
-    shift
-fi
+select_flavor "$@"
+shift "${FLAVOR_SHIFT}"
 
 if [ $# -eq 0 ]; then
     set -- kiro-cli

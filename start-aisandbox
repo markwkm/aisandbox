@@ -45,8 +45,9 @@
 set -eu
 
 # Follow a symlink back to the real script before taking its
-# directory, so the Containerfiles next to it are still found
-# when the script is reached through a symlink in PATH.
+# directory, so the shared library and the Containerfiles next
+# to it are still found when the script is reached through a
+# symlink in PATH.
 SELF="$0"
 while [ -L "${SELF}" ]; do
     LINK="$(readlink "${SELF}")"
@@ -56,19 +57,11 @@ while [ -L "${SELF}" ]; do
     esac
 done
 DIR="$(dirname "${SELF}")"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+. "${DIR}/lib.sh"
 
-FLAVOR="${AISANDBOX_FLAVOR:-ubuntu}"
-if [ $# -ge 1 ] && [ -f "${DIR}/Containerfile.${1}" ]; then
-    FLAVOR="$1"
-    shift
-fi
-if [ "${FLAVOR}" = "ubuntu" ]; then
-    IMAGE="${AISANDBOX_IMAGE:-aisandbox}"
-    NAME="${AISANDBOX_NAME:-aisandbox}"
-else
-    IMAGE="${AISANDBOX_IMAGE:-aisandbox-${FLAVOR}}"
-    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
-fi
+select_flavor "$@"
+shift "${FLAVOR_SHIFT}"
 SRC="${1:-${AISANDBOX_SRC:-${HOME}/.local/src}}"
 
 # Container engines require absolute paths in -v mounts, so
@@ -79,14 +72,7 @@ case "${SRC}" in
     *) SRC="$(pwd)/${SRC}" ;;
 esac
 
-if command -v podman >/dev/null 2>&1; then
-    ENGINE="podman"
-elif command -v docker >/dev/null 2>&1; then
-    ENGINE="docker"
-else
-    echo "error: neither podman nor docker is installed" >&2
-    exit 1
-fi
+find_engine
 
 if "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
     echo "container '${NAME}' already exists;" \

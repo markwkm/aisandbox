@@ -4,8 +4,9 @@
 #
 # Usage: stop-aisandbox [flavor]
 #
-# The optional flavor argument selects which flavor's container
-# to stop, like start-aisandbox (default: ubuntu); it takes
+# The optional flavor argument names a Containerfile.<flavor>
+# next to this script and selects which flavor's container to
+# stop, like start-aisandbox (default: ubuntu); it takes
 # precedence over AISANDBOX_FLAVOR.
 #
 # Environment:
@@ -17,21 +18,28 @@
 
 set -eu
 
-FLAVOR="${1:-${AISANDBOX_FLAVOR:-ubuntu}}"
-if [ "${FLAVOR}" = "ubuntu" ]; then
-    NAME="${AISANDBOX_NAME:-aisandbox}"
-else
-    NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
-fi
+# Follow a symlink back to the real script before taking its
+# directory, so the shared library next to it is still found
+# when the script is reached through a symlink in PATH.
+SELF="$0"
+while [ -L "${SELF}" ]; do
+    LINK="$(readlink "${SELF}")"
+    case "${LINK}" in
+        /*) SELF="${LINK}" ;;
+        *) SELF="$(dirname "${SELF}")/${LINK}" ;;
+    esac
+done
+DIR="$(dirname "${SELF}")"
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+. "${DIR}/lib.sh"
 
-if command -v podman >/dev/null 2>&1; then
-    ENGINE="podman"
-elif command -v docker >/dev/null 2>&1; then
-    ENGINE="docker"
-else
-    echo "error: neither podman nor docker is installed" >&2
+select_flavor "$@"
+shift "${FLAVOR_SHIFT}"
+if [ $# -gt 0 ]; then
+    echo "usage: stop-aisandbox [flavor]" >&2
     exit 1
 fi
+find_engine
 
 if ! "${ENGINE}" container inspect "${NAME}" >/dev/null 2>&1; then
     echo "container '${NAME}' is not running" >&2

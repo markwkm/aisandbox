@@ -59,8 +59,8 @@ Files
     installed the same way in every flavor (Node.js, the npm- and
     uv-distributed tools, the release binaries, Rust, Julia, the AWS
     CLI).  Each script carries that tool's notes and version pin, so a
-    version is bumped in one place for all flavors; ``lib.sh`` holds the
-    architecture and checksum helpers they share.  The Containerfiles
+    version is bumped in one place for all flavors; ``tools/lib.sh`` holds
+    the architecture and checksum helpers they share.  The Containerfiles
     copy each script to ``/opt/aisandbox`` in the image and run it, one
     ``COPY`` per step so editing a script reruns only that step and the
     ones after it.  Distribution package and repository setup stays in
@@ -88,15 +88,20 @@ Files
     rebuilds the base image as well.  Builds the ubuntu flavor unless a
     flavor argument names another.
 
-The scripts look for the Containerfiles, and for each other, next to
-themselves, following a symlink back to the real script first.  They can
-therefore be symlinked into a directory on ``PATH``::
+``lib.sh``
+    Shell functions the scripts share: the flavor argument and the image
+    and container names that follow from it, and the choice between
+    podman and docker.
+
+The scripts look for the Containerfiles, for ``lib.sh``, and for each
+other next to themselves, following a symlink back to the real script
+first.  They can therefore be symlinked into a directory on ``PATH``::
 
     ln -s ~/.local/src/aisandbox/start-agent ~/.local/bin/start-agent
     ln -s ~/.local/src/aisandbox/open-shell ~/.local/bin/open-shell
 
 Copying them there instead does not work, since a copy has no way back
-to the Containerfiles.
+to the Containerfiles and ``lib.sh``.
 
 Building the image
 ==================
