@@ -45,19 +45,23 @@ RUN curl -fsSL -o /tmp/kiro-cli.deb \
     && rm -f /tmp/kiro-cli.deb \
     && rm -rf /var/lib/apt/lists/*
 
-COPY tools/install-npm-agents.sh /opt/aisandbox/
+# The scripts for the steps below, copied together: the base
+# files copy one script per step so that an edited script
+# reruns only its own step, but this image is always built
+# without the layer cache, so splitting the copy gains nothing.
+# The base image already holds install-uv-tools.sh for its
+# Python linters; this file copies its own so that an edit takes
+# effect on the next agent build rather than the next base
+# build.
+COPY tools/install-npm-agents.sh tools/install-goose.sh \
+    tools/install-uv-tools.sh /opt/aisandbox/
+
 RUN /opt/aisandbox/install-npm-agents.sh
 
-COPY tools/install-goose.sh /opt/aisandbox/
 RUN /opt/aisandbox/install-goose.sh
 
 # aider, installed the way its own install script does (via uv)
-# but into system-wide locations so any user can run it.  The
-# base image holds a copy of the script already, for its Python
-# linters, but this file copies its own so that an edit takes
-# effect on the next agent build rather than the next base
-# build.
-COPY tools/install-uv-tools.sh /opt/aisandbox/
+# but into system-wide locations so any user can run it.
 RUN /opt/aisandbox/install-uv-tools.sh aider-chat
 
 # Updating inside a container makes no sense; pin what was built.
