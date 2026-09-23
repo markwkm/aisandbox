@@ -29,13 +29,13 @@
 #
 # The unversioned /opt/yugabyte symlink gives the commands below
 # a stable path, as /opt/oracle/instantclient does in
-# Containerfile.ubuntu.
+# base/Containerfile.ubuntu.
 #
 # The unpacked tree is handed to the uid-1000 agent user, so it
 # can be written to from inside the sandbox without root.  The
 # owner is given numerically because that user does not have
 # the same name in both flavors, and does not exist yet at this
-# point in Containerfile.oracle, which creates it further down;
+# point in base/Containerfile.oracle, which creates it further down;
 # 1000:1000 is also what start-aisandbox maps the host user
 # onto at run time.  The chmod keeps the tree readable and
 # executable for everyone else, including the oracle flavor's

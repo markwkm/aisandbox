@@ -1,42 +1,55 @@
 #!/bin/sh
-# Update an aisandbox image: rebuild it, then remove the image
-# it replaces.  --pull refreshes the base image, and a new base
-# reruns every step, so OS packages and all agents come in at
-# their current versions whenever the base image has been
-# updated; -n forces that even on an unchanged base.
+# Update an aisandbox image: rebuild it, then remove the images
+# it replaces.
+#
+# Each flavor is two images: the base image, with the
+# development tools, toolchains, and database servers
+# (base/Containerfile.<flavor>), and the image that is run,
+# which adds the coding agents on top of it
+# (Containerfile.<flavor>).  The agents release far more often
+# than anything in the base, so by default only the agent image
+# is rebuilt; the base is built only when it is missing.  -f
+# rebuilds the base as well, for the periodic update of the
+# operating system packages, toolchains, and databases.
+#
+# Neither build uses the layer cache.  Every step of the agent
+# image installs an agent at whatever version is current, so a
+# cached step would keep the old one, and a base rebuild exists
+# to refresh what is in it, so it reruns every step and pulls
+# the image it builds on again.
 #
 # A running container keeps using the old image; restart it with
 # stop-aisandbox and start-aisandbox to pick up the update.
 #
-# Usage: update-aisandbox [-n] [flavor]
+# Usage: update-aisandbox [-f] [flavor]
 #
-# The optional flavor argument selects which Containerfile to
-# build: Containerfile.<flavor>, e.g. "ubuntu" (the default) or
-# "oracle".  It takes precedence over AISANDBOX_FLAVOR.
+# The optional flavor argument selects which Containerfiles to
+# build: Containerfile.<flavor> and base/Containerfile.<flavor>,
+# e.g. "ubuntu" (the default) or "oracle".  It takes precedence
+# over AISANDBOX_FLAVOR.
 #
 # Options:
-#   -n  build with --no-cache, forcing every step to rerun so
-#       OS packages and agents fetch current versions even
-#       when the base image is unchanged (also replaces a bad
-#       download cached by an earlier build)
+#   -f  full update: rebuild the base image too, for the
+#       periodic update of everything besides the agents
 #
 # Environment:
 #   AISANDBOX_FLAVOR  Containerfile variant to build
 #                     (default: ubuntu)
-#   AISANDBOX_IMAGE   image to build (default: aisandbox for the
-#                     ubuntu flavor, aisandbox-<flavor> for the
-#                     others)
+#   AISANDBOX_IMAGE   agent image to build (default: aisandbox
+#                     for the ubuntu flavor, aisandbox-<flavor>
+#                     for the others); the base image is named
+#                     after it with -base appended
 #   AISANDBOX_NAME    container name (default: same as the
 #                     image default)
 
 set -eu
 
-NOCACHE=""
-while getopts n opt; do
+FULL=""
+while getopts f opt; do
     case "${opt}" in
-        n) NOCACHE="--no-cache" ;;
+        f) FULL="yes" ;;
         *)
-            echo "usage: update-aisandbox [-n] [flavor]" >&2
+            echo "usage: update-aisandbox [-f] [flavor]" >&2
             exit 1
             ;;
     esac
@@ -51,6 +64,7 @@ else
     IMAGE="${AISANDBOX_IMAGE:-aisandbox-${FLAVOR}}"
     NAME="${AISANDBOX_NAME:-aisandbox-${FLAVOR}}"
 fi
+BASE="${IMAGE}-base"
 
 if command -v podman >/dev/null 2>&1; then
     ENGINE="podman"
@@ -66,6 +80,7 @@ fi
 # so both are still found when the script is reached through a
 # symlink in PATH.
 CONTAINERFILE="Containerfile.${FLAVOR}"
+BASEFILE="base/Containerfile.${FLAVOR}"
 SELF="$0"
 while [ -L "${SELF}" ]; do
     LINK="$(readlink "${SELF}")"
@@ -75,57 +90,77 @@ while [ -L "${SELF}" ]; do
     esac
 done
 cd "$(dirname "${SELF}")"
-if [ ! -f "${CONTAINERFILE}" ]; then
-    echo "error: no ${CONTAINERFILE} in $(pwd); available:" \
-        Containerfile.* >&2
+if [ ! -f "${CONTAINERFILE}" ] || [ ! -f "${BASEFILE}" ]; then
+    echo "error: no ${CONTAINERFILE} with ${BASEFILE} in $(pwd);" \
+        "available:" Containerfile.* >&2
     exit 1
 fi
 
-old_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
-    "${IMAGE}" 2>/dev/null || true)"
+# Image id, or nothing when the image does not exist.
+image_id() {
+    "${ENGINE}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || true
+}
 
-# --pull refreshes the base image; layer caching keys each
-# step on its parent layer, so a new base reruns every step
-# (apt and the agent installers fetch current versions), while
-# a rebuild on an unchanged base reuses completed layers and
-# only reruns from the first changed step (a rerun after a
-# failed build resumes at the step that failed).  -n adds
-# --no-cache, forcing a full rerun regardless.
-#
+old_base_id="$(image_id "${BASE}")"
+old_id="$(image_id "${IMAGE}")"
+
 # podman defaults to the OCI image format, which discards any
-# HEALTHCHECK (the oracle flavor inherits one from its base
-# image), so ask for the docker format there; docker always
-# uses it and has no such flag.
+# HEALTHCHECK (the oracle flavor inherits one from the image its
+# base builds on), so ask for the docker format there, for both
+# builds; docker always uses it and has no such flag.
 FORMAT=""
 if [ "${ENGINE}" = "podman" ]; then
     FORMAT="--format docker"
 fi
-if [ -n "${NOCACHE}" ]; then
-    echo "rebuilding '${IMAGE}' without cache;" \
-        "this can take half an hour"
-else
-    echo "rebuilding '${IMAGE}'; this can take half an hour" \
-        "when the base image has changed (unchanged steps" \
-        "reuse cached layers)"
+
+# The base image: built when it is missing, rebuilt with -f,
+# either way with the image it builds on pulled again and
+# without the layer cache, so every step reruns and the
+# operating system packages, toolchains, and databases come in
+# current.  A base build that fails partway therefore starts
+# over on the next run instead of resuming at the failed step.
+if [ -n "${FULL}" ] || [ -z "${old_base_id}" ]; then
+    echo "building base image '${BASE}'; this can take half an hour"
+    # ${FORMAT} is expanded unquoted on purpose: it is either
+    # empty or a single flag.
+    "${ENGINE}" build --pull --no-cache ${FORMAT} \
+        --build-arg USERNAME="$(id -un)" \
+        --build-arg USERSHELL="${SHELL:-/bin/bash}" \
+        -t "${BASE}" -f "${BASEFILE}" .
 fi
-# ${FORMAT} and ${NOCACHE} are expanded unquoted on purpose:
-# each is either empty or a single flag.
-"${ENGINE}" build --pull ${FORMAT} ${NOCACHE} \
-    --build-arg USERNAME="$(id -un)" \
-    --build-arg USERSHELL="${SHELL:-/bin/bash}" \
+
+# The agent image, without the layer cache: every step in it
+# installs an agent at whatever version is current, so a cached
+# step would keep the old one, and an agent build with the
+# cache on and an unchanged base would install nothing at all.
+# With the cache off, exactly those steps rerun on top of the
+# base image's layers, which are shared, not rebuilt.  No
+# --pull here: the base image exists only locally, and a pull
+# policy of "always" would fail looking for it in a registry.
+echo "rebuilding '${IMAGE}' on '${BASE}'"
+"${ENGINE}" build --no-cache ${FORMAT} \
+    --build-arg BASE="${BASE}" \
     -t "${IMAGE}" -f "${CONTAINERFILE}" .
 
-new_id="$("${ENGINE}" image inspect --format '{{.Id}}' \
-    "${IMAGE}")"
+new_base_id="$(image_id "${BASE}")"
+new_id="$(image_id "${IMAGE}")"
 
-if [ -z "${old_id}" ] || [ "${old_id}" = "${new_id}" ]; then
-    echo "image '${IMAGE}' is up to date"
-    exit 0
+# Remove only the images we replaced, not other dangling images:
+# the agent image first, then the base it was built on, since
+# docker refuses to remove an image that a local child is built
+# on (podman removes a dangling parent together with its last
+# child, and the second removal then finds nothing to do).
+# Removal fails harmlessly if a running container still uses
+# the image.
+removed=""
+if [ -n "${old_id}" ] && [ "${old_id}" != "${new_id}" ] &&
+    "${ENGINE}" image rm "${old_id}" >/dev/null 2>&1; then
+    removed="yes"
 fi
-
-# Remove only the image we replaced, not other dangling images.
-# Removal fails harmlessly if a running container still uses it.
-if "${ENGINE}" image rm "${old_id}" >/dev/null 2>&1; then
+if [ -n "${old_base_id}" ] && [ "${old_base_id}" != "${new_base_id}" ]; then
+    "${ENGINE}" image rm "${old_base_id}" >/dev/null 2>&1 || true
+fi
+if [ -n "${removed}" ]; then
     echo "old image removed"
 fi
 

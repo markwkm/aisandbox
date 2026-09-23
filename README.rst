@@ -22,9 +22,9 @@ Agents installed (command names in parentheses):
 The image also carries common development tools plus linters and formatters
 for C/C++, Python, Rust, Go, shell, YAML, Markdown, reStructuredText, SQL,
 JavaScript, CSS, HTML, JSON, XML, Lua, Perl, prose, and Containerfiles (see
-Containerfile.ubuntu for the full list).  Also included are the Rust and Go
-toolchains, meson and ninja, the docutils rst2* tools and sphinx, and the
-DocBook toolchain the PostgreSQL documentation build requires.
+``base/Containerfile.ubuntu`` for the full list).  Also included are the Rust
+and Go toolchains, meson and ninja, the docutils rst2* tools and sphinx, and
+the DocBook toolchain the PostgreSQL documentation build requires.
 
 Both images also carry database servers and client development files:
 PostgreSQL, MySQL, CockroachDB, YugabyteDB, and SQLite, along with
@@ -39,12 +39,20 @@ Files
 =====
 
 ``Containerfile.ubuntu``
-    Default image definition.
+    Default image definition: the coding agents, on top of the base image
+    that ``base/Containerfile.ubuntu`` builds.  The agents release far
+    more often than anything in the base, so they are a separate image
+    that ``update-aisandbox`` rebuilds on its own.
 
 ``Containerfile.oracle``
-    Variant with Oracle Database Free, on Oracle Linux 8; carries the same
-    tools where Oracle Linux packaging allows (its header lists what is
-    left out).
+    Variant with Oracle Database Free, on Oracle Linux 8, laid out the
+    same way over ``base/Containerfile.oracle``.
+
+``base/``
+    The base image definitions: everything except the agents, that is
+    the development tools, linters, toolchains, and database servers and
+    client libraries.  The Oracle one carries the same tools where Oracle
+    Linux packaging allows (its header lists what is left out).
 
 ``tools/``
     Install scripts shared by the Containerfiles, one per tool that is
@@ -75,10 +83,10 @@ Files
     Stops the sandbox container, which removes itself.
 
 ``update-aisandbox``
-    Rebuilds an image so the base image, OS packages, and agents come in
-    at current versions, then removes the replaced image.  Builds
-    ``Containerfile.ubuntu`` unless a flavor argument names another
-    variant.
+    Rebuilds the agent image on the existing base image, so the agents
+    come in at current versions, then removes the replaced image.  ``-f``
+    rebuilds the base image as well.  Builds the ubuntu flavor unless a
+    flavor argument names another.
 
 The scripts look for the Containerfiles, and for each other, next to
 themselves, following a symlink back to the real script first.  They can
@@ -93,55 +101,58 @@ to the Containerfiles.
 Building the image
 ==================
 
-Build with podman::
+Each flavor is two images: the base image, with everything except the
+agents, and the image that is run, which adds the agents on top of it.
+Build the base first, from the repository root so that ``tools/`` is in
+the build context, then the agent image without the layer cache::
 
     podman build --build-arg USERNAME="$(id -un)" \
         --build-arg USERSHELL="${SHELL}" \
-        -t aisandbox -f Containerfile.ubuntu .
+        -t aisandbox-base -f base/Containerfile.ubuntu .
+    podman build --no-cache -t aisandbox -f Containerfile.ubuntu .
 
-or with docker::
-
-    docker build --build-arg USERNAME="$(id -un)" \
-        --build-arg USERSHELL="${SHELL}" \
-        -t aisandbox -f Containerfile.ubuntu .
+docker takes the same arguments in place of podman.
 
 The ``USERNAME`` build argument names the container user after the invoking
 host user so absolute paths match on both sides; Claude Code and other
 agents key per-project state (sessions, trust) on the working directory's
 absolute path, and matching ``/home/<user>`` paths keep sessions resumable
-on host and in the sandbox alike.
+on host and in the sandbox alike.  The agent image needs no such argument:
+it returns to that user by uid.
 
-The build downloads all agents at their current versions; rebuild
-periodically to pick up tool and OS security fixes (the agents'
-self-updaters are disabled inside the image)::
+The build downloads all agents at their current versions, and the agents'
+self-updaters are disabled inside the image, so updating them means
+rebuilding the agent image.  The update script does that without the
+layer cache, since every step in ``Containerfile.ubuntu`` installs an
+agent and a cached step would keep the old version, while the base image
+is reused as it is::
 
     ./update-aisandbox
 
-The update script rebuilds with ``--pull``, which refreshes the base
-image; a new base reruns every install step, so OS packages and agents
-fetch current versions whenever the base image has been updated, while a
-rebuild on an unchanged base reuses cached layers (a rerun after a failed
-build resumes from the step that failed rather than starting over).
-``update-aisandbox -n`` adds ``--no-cache``, forcing every step to rerun
-even when the base image is unchanged.  The script then removes the image
-it replaced.  A running container stays on the old image until restarted
-with ``stop-aisandbox`` and ``start-aisandbox``.  A flavor argument
-selects another ``Containerfile.<flavor>`` and tags the image
-``aisandbox-<flavor>``::
+``update-aisandbox -f`` rebuilds the base image as well.  That is the
+periodic update: a base build always pulls the image it builds on and
+runs every step without the layer cache, so operating system packages,
+toolchains, databases, and agents all come in at current versions.  The
+base image is also built when it is missing.  In both modes the script
+then removes the images it replaced.  A running container stays on the
+old image until restarted with ``stop-aisandbox`` and ``start-aisandbox``.
+A flavor argument selects another ``Containerfile.<flavor>`` with its
+``base/Containerfile.<flavor>``, and tags the images ``aisandbox-<flavor>``
+and ``aisandbox-<flavor>-base``::
 
     ./update-aisandbox oracle
+    ./update-aisandbox -f oracle
 
-Both images build on x86_64 and aarch64: the ``tools/`` scripts pick the
+Both flavors build on x86_64 and aarch64: the ``tools/`` scripts pick the
 release built for the architecture they run on, and fail the build rather
-than install a binary that cannot run.  Two steps in
-``Containerfile.ubuntu`` are still amd64-only, so the Ubuntu image needs
-them replaced to build on arm64:
+than install a binary that cannot run.  Two steps in the Ubuntu flavor are
+still amd64-only, so it needs them replaced to build on arm64:
 
-* the Kiro CLI .deb, for which upstream publishes an arm64 zip instead
-  (the URL is in the Containerfile.ubuntu comments)
-* the Oracle Instant Client zips, which Oracle publishes for arm64 only
-  under version-numbered URLs rather than the permanent latest-version
-  ones used here
+* the Kiro CLI .deb in ``Containerfile.ubuntu``, for which upstream
+  publishes an arm64 zip instead (the URL is in that file's comments)
+* the Oracle Instant Client zips in ``base/Containerfile.ubuntu``, which
+  Oracle publishes for arm64 only under version-numbered URLs rather than
+  the permanent latest-version ones used here
 
 Starting a container
 ====================
@@ -155,7 +166,7 @@ It prefers podman and falls back to docker, and leaves a container named
 name: a flavor argument (or ``AISANDBOX_FLAVOR``) makes ``start-aisandbox
 oracle`` run the oracle image as ``aisandbox-oracle``, and points
 ``open-shell`` and ``stop-aisandbox`` at that container.  One container
-per Containerfile can run at a time, and the flavors run side by side,
+per flavor can run at a time, and the flavors run side by side,
 sharing the host network and the mounted source and agent state
 directories.  Open as many shells in it as needed
 (the host's login shell, as an unprivileged container user named after the
@@ -269,10 +280,11 @@ container so per-project agent state stays resumable on both sides.
 Oracle variant
 ==============
 
-``Containerfile.oracle`` builds the sandbox on Oracle's official Oracle
-Database Free image (``container-registry.oracle.com/database/free``,
-Oracle Linux 8), so the container also runs an Oracle database.  Build it
-with::
+``base/Containerfile.oracle`` builds the sandbox's base image on Oracle's
+official Oracle Database Free image
+(``container-registry.oracle.com/database/free``, Oracle Linux 8), so the
+container also runs an Oracle database, and ``Containerfile.oracle`` adds
+the agents on top.  Build both with::
 
     ./update-aisandbox oracle
 
@@ -294,7 +306,7 @@ minutes to create it, so wait for ``DATABASE IS READY TO USE!`` in
 pass.  The container shares the host network like every flavor, so the
 database listens on port 1521 on the host as well; the ``FREEPDB1``
 pluggable database is reachable at ``//localhost:1521/FREEPDB1`` as
-``system`` with the password ``oracle`` set in Containerfile.oracle.  The
+``system`` with the password ``oracle`` set by Oracle's image.  The
 full ``ORACLE_HOME`` is present, including ``sqlplus``, ``sqlldr``, and
 the OCI headers and client libraries for building client programs.
 
@@ -310,9 +322,10 @@ not persisted across container removal.
 
 The variant carries the same tools as the Ubuntu image where Oracle
 Linux 8 packaging and its glibc allow, including the MySQL and PostgreSQL
-servers and client development files; the ``Containerfile.oracle`` header
-lists what is left out (notably Kiro CLI and ast-grep) and what is
-substituted.
+servers and client development files; the ``base/Containerfile.oracle``
+header lists what is left out (notably ast-grep) and what is substituted,
+and ``Containerfile.oracle`` leaves out Kiro CLI, which only ships as an
+Ubuntu .deb.
 
 Notes
 =====

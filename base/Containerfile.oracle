@@ -1,0 +1,438 @@
+# Base image of the AI CLI sandbox with Oracle Database Free, on
+# Oracle Linux 8: every tool except the coding agents, which
+# ../Containerfile.oracle adds on top of this image (see
+# base/Containerfile.ubuntu for why the agents are separate).
+#
+# A variant of base/Containerfile.ubuntu built on Oracle's official
+# Oracle Database Free image (currently 26ai; Oracle Free Use
+# Terms and Conditions license).  The regular image is used
+# instead of the -lite variant so the full ORACLE_HOME is
+# present: the OCI header files in
+# ${ORACLE_HOME}/rdbms/public, libclntsh, sqlplus, sqlldr, and
+# the dbca seed template, so no Instant Client is needed.  The
+# image's latest tag is Oracle Linux 8 based on both amd64 and
+# arm64 (the installed RPM is an el8 package), which determines
+# the package set below.
+#
+# Steps that install a tool the same way in every flavor run a
+# script from tools/, shared with base/Containerfile.ubuntu; each
+# script carries that tool's own notes and version pin.  This
+# file keeps what is specific to Oracle Linux.
+#
+# Compared with base/Containerfile.ubuntu, the following are left
+# out because Oracle Linux 8 packaging or its glibc 2.28 makes
+# them non-trivial to install:
+#
+# - ast-grep: upstream binaries need glibc 2.34
+# - splint, entr, fop, collectd-utils: not packaged for Oracle
+#   Linux 8
+#
+# Substitutions:
+#
+# - ctags is exuberant ctags (universal-ctags is not packaged)
+# - the Go toolchain, shfmt, and shunit2 come from their
+#   upstream releases
+# - R comes from EPEL (CRAN publishes no Oracle Linux packages)
+# - black, codespell, flake8, mypy, and pylint are uv tools
+#   (EPEL's builds are missing or built for Python 3.6)
+# - MySQL comes from Oracle Linux's mysql module and
+#   PostgreSQL from the PGDG yum repository (one major
+#   version, not the all-majors development packages)
+# - Terraform, OpenTofu, and Salt install from the RPM
+#   equivalents of the apt repositories base/Containerfile.ubuntu
+#   uses; Ansible comes from EPEL
+#
+# Build from the repository root, so that tools/ is in the
+# build context, with the container user named after the
+# invoking user so absolute paths (and the session state that
+# tools key on them) match between host and container:
+#
+#   podman build --format docker \
+#       --build-arg USERNAME="$(id -un)" \
+#       --build-arg USERSHELL="${SHELL}" \
+#       -t aisandbox-oracle-base -f base/Containerfile.oracle .
+#
+# --format docker keeps the HEALTHCHECK Oracle's image defines,
+# which podman's default OCI format drops.  Or run
+# "./update-aisandbox oracle", which builds this image when it
+# is missing or with -f, and the agent image on top of it.
+# The ../Containerfile.oracle header covers starting the
+# container, the database, and its users.
+
+FROM container-registry.oracle.com/database/free:latest
+
+USER root
+
+# Everything installed from the Oracle Linux 8 repositories, in
+# one layer, covering the same ground as base/Containerfile.ubuntu's
+# first layer where packages exist: oracle-epel-release-el8
+# adds the ol8_developer_EPEL repository (EPEL builds published
+# by Oracle), and ol8_codeready_builder carries meson,
+# ninja-build, pandoc, and several -devel packages.
+# install_weak_deps=False matches apt's
+# --no-install-recommends.
+#
+# Notes relative to the Ubuntu package set:
+#
+# - clang-tools-extra carries clangd (the C/C++ language
+#   server) together with clang-tidy and clang-format, which
+#   Ubuntu packages separately (dnf resolves the package from
+#   the llvm-toolset module's default stream on its own); it
+#   pulls in clang-libs but not the clang driver, which pgxs
+#   needs to emit the LLVM bitcode a PostgreSQL server built
+#   with --with-llvm asks for, so clang is named as well
+#   (base/Containerfile.ubuntu gets the driver from apt without
+#   naming it);
+# - sqlite provides the sqlite3 command;
+# - fd-find installs /usr/bin/fd directly (no fdfind rename);
+# - perf is the real binary (no kernel-version wrapper);
+# - glibc-langpack-en provides the en_US.UTF-8 locale, so no
+#   locale-gen step is needed;
+# - python3.12 does not provide /usr/bin/python3 (Oracle
+#   Linux 8 reserves it for the python36 package), so symlinks
+#   in /usr/local/bin put python3 and pip3 on the PATH ahead of
+#   any 3.6 that a dependency may drag in.
+#
+# At the end, "git lfs install --system" registers the LFS
+# filters so clones fetch LFS content.
+#
+# Oracle's image is built inside Oracle Cloud, whose setup
+# writes the build machine's region into /etc/yum/vars/
+# ociregion, pointing the repositories at an OCI-internal
+# mirror (yum-<region>.oracle.com) that is unreachable from
+# outside; truncating the file makes the $ociregion variable
+# expand to nothing, falling back to the public
+# yum.oracle.com.
+RUN : > /etc/yum/vars/ociregion \
+    && dnf -y --setopt=install_weak_deps=False install \
+        oracle-epel-release-el8 \
+    && dnf -y --setopt=install_weak_deps=False \
+        --enablerepo ol8_developer_EPEL \
+        --enablerepo ol8_codeready_builder install \
+        ansible \
+        autoconf \
+        automake \
+        bash-completion \
+        binutils \
+        bison \
+        bzip2 \
+        ca-certificates \
+        clang \
+        clang-tools-extra \
+        cloc \
+        cmake \
+        collectd \
+        cppcheck \
+        cscope \
+        ctags \
+        curl \
+        diffutils \
+        docbook-dtds \
+        docbook-style-xsl \
+        dos2unix \
+        fd-find \
+        file \
+        findutils \
+        flex \
+        fzf \
+        gcc \
+        gcc-c++ \
+        gdb \
+        ghostscript \
+        git \
+        git-lfs \
+        glibc-devel \
+        glibc-langpack-en \
+        gnupg2 \
+        gnuplot \
+        graphviz \
+        gzip \
+        hostname \
+        hyperfine \
+        ImageMagick \
+        jq \
+        less \
+        libev-devel \
+        libtool \
+        libxml2 \
+        libxslt \
+        make \
+        man-db \
+        meson \
+        moreutils \
+        neovim \
+        ninja-build \
+        openssh-clients \
+        pandoc \
+        patch \
+        perf \
+        pkgconf-pkg-config \
+        poppler-utils \
+        procps-ng \
+        python3.12 \
+        python3.12-pip \
+        quilt \
+        R-core \
+        R-core-devel \
+        ripgrep \
+        rsync \
+        ShellCheck \
+        sqlite \
+        sqlite-devel \
+        strace \
+        sysstat \
+        tar \
+        tidy \
+        tmux \
+        tree \
+        unixODBC \
+        unixODBC-devel \
+        unzip \
+        wget \
+        which \
+        xz \
+        yamllint \
+        zip \
+        zsh \
+        zstd \
+    && dnf clean all \
+    && git lfs install --system \
+    && ln -s /usr/bin/python3.12 /usr/local/bin/python3 \
+    && ln -s /usr/bin/pip3.12 /usr/local/bin/pip3
+
+ENV LANG=en_US.UTF-8
+
+# OCI client development files, completing the database client
+# development files the way base/Containerfile.ubuntu's Instant
+# Client layer does: the headers already live in
+# ${ORACLE_HOME}/rdbms/public, and the ld.so.conf.d entry makes
+# the client libraries in ${ORACLE_HOME}/lib visible
+# system-wide.
+RUN echo "${ORACLE_HOME}/lib" \
+        > /etc/ld.so.conf.d/oracle-home.conf \
+    && ldconfig
+
+# MySQL server and client development files from Oracle
+# Linux 8's mysql module (dnf resolves its default mysql:8.0
+# stream on its own), matching base/Containerfile.ubuntu's
+# mysql-server-8.0 and libmysqlclient-dev.  As there, no init
+# system runs here, and the package's /var/lib/mysql is not
+# writable by the container user, so initialize a data
+# directory in ${HOME} and run the server in the foreground:
+#   mysqld --initialize-insecure --datadir="${HOME}/mysql"
+#   mysqld --datadir="${HOME}/mysql" \
+#       --socket="${HOME}/mysql/mysql.sock"
+# The RPM stamps the cap_sys_nice file capability on the mysqld
+# binary, and rootless podman's overlay refuses to execute a
+# binary carrying that xattr (EPERM, even as root), so strip
+# it.
+RUN dnf -y --setopt=install_weak_deps=False install \
+        mysql-devel \
+        mysql-server \
+    && setcap -r /usr/libexec/mysqld \
+    && dnf clean all
+
+# PostgreSQL client, server, and development packages from the
+# PGDG yum repository, the equivalent of base/Containerfile.ubuntu's
+# PGDG apt layer: the repository RPM sets up every maintained
+# major version's repository, the stock postgresql module is
+# disabled per the PGDG install instructions, and
+# ol8_codeready_builder supplies development dependencies.
+# PGDG yum has no equivalent of apt's
+# postgresql-server-dev-all, so only one major version is
+# installed; bump PG_MAJOR to move it, which also moves the
+# PATH and PKG_CONFIG_PATH entries below.  The packages install
+# under /usr/pgsql-<major> (psql, pg_config, and initdb in bin,
+# libpq.pc in lib/pkgconfig), which those additions make
+# reachable without version-specific paths.  libcurl-devel
+# satisfies the libcurl requirement PostgreSQL 18's libpq.pc
+# declares, without which pkg-config cannot resolve libpq's
+# flags.
+ARG PG_MAJOR=18
+RUN dnf -y install \
+        "https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm" \
+    && dnf -qy module disable postgresql \
+    && dnf -y --setopt=install_weak_deps=False \
+        --enablerepo ol8_codeready_builder install \
+        libcurl-devel \
+        "postgresql${PG_MAJOR}-devel" \
+        "postgresql${PG_MAJOR}-server" \
+    && dnf clean all
+ENV PATH=${PATH}:/usr/pgsql-${PG_MAJOR}/bin \
+    PKG_CONFIG_PATH=/usr/pgsql-${PG_MAJOR}/lib/pkgconfig
+
+# Helper library the install scripts below source; every step
+# after this one reruns when it changes.
+COPY tools/lib.sh /opt/aisandbox/
+
+# nodejs.org builds its Linux binaries on RHEL 8, so they need
+# exactly the glibc 2.28 this image has; Oracle Linux 8's own
+# nodejs module is much older.
+COPY tools/install-node.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-node.sh
+
+# GitHub CLI (gh) from GitHub's own RPM repository (Oracle
+# Linux does not package gh at all).
+RUN curl -fsSL -o /etc/yum.repos.d/gh-cli.repo \
+        https://cli.github.com/packages/rpm/gh-cli.repo \
+    && dnf -y --setopt=install_weak_deps=False install gh \
+    && dnf clean all
+
+# Oracle Linux 8's golang sits behind dnf modularity and lags
+# upstream, so take the toolchain from go.dev; Ubuntu has a
+# current enough golang-go package.
+COPY tools/install-go.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-go.sh
+
+COPY tools/install-uv.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv.sh
+
+COPY tools/install-npm-linters.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-npm-linters.sh
+
+# Python-based tools, as in base/Containerfile.ubuntu, plus the
+# linters that image takes from apt (black, codespell, flake8,
+# mypy, pylint): EPEL either lacks them or builds them for
+# Python 3.6.
+COPY tools/install-uv-tools.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-uv-tools.sh \
+        black \
+        codespell \
+        cpplint \
+        doc8 \
+        flake8 \
+        mypy \
+        pre-commit \
+        proselint \
+        pylint \
+        restructuredtext-lint \
+        ruff \
+        sqlfluff
+
+COPY tools/install-hadolint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-hadolint.sh
+
+COPY tools/install-golangci-lint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-golangci-lint.sh
+
+COPY tools/install-actionlint.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-actionlint.sh
+
+COPY tools/install-gitleaks.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-gitleaks.sh
+
+COPY tools/install-yq.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yq.sh
+
+# shfmt and shunit2, which base/Containerfile.ubuntu takes from apt;
+# neither is packaged for Oracle Linux 8.
+COPY tools/install-shfmt.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-shfmt.sh
+
+COPY tools/install-shunit2.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-shunit2.sh
+
+COPY tools/install-rust.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-rust.sh
+ENV RUSTUP_HOME=/opt/rust \
+    PATH=/opt/rust/bin:${PATH}
+
+COPY tools/install-julia.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-julia.sh
+
+COPY tools/install-awscli.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-awscli.sh
+
+COPY tools/install-session-manager-plugin.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-session-manager-plugin.sh
+
+# Terraform from HashiCorp's RPM repository, using the .repo
+# file HashiCorp publishes for RHEL-family distributions (its
+# $releasever expands to 8 here).  Terraform is under the
+# Business Source License since 1.6; the OpenTofu step below
+# installs the open-source fork.
+RUN curl -fsSL -o /etc/yum.repos.d/hashicorp.repo \
+        https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo \
+    && dnf -y --setopt=install_weak_deps=False install terraform \
+    && dnf clean all
+
+# OpenTofu (tofu), the open-source Terraform fork, from its
+# packagecloud RPM repository, following the project's own
+# install documentation: the repository is signed with two keys
+# (the OpenTofu project key and the packagecloud repository
+# key), both listed in gpgkey, and the rpm_any path serves
+# every RPM-based distribution.
+RUN printf '%s\n' \
+        '[opentofu]' \
+        'name=opentofu' \
+        'baseurl=https://packages.opentofu.org/opentofu/tofu/rpm_any/rpm_any/$basearch' \
+        'repo_gpgcheck=0' \
+        'gpgcheck=1' \
+        'enabled=1' \
+        'gpgkey=https://get.opentofu.org/opentofu.gpg' \
+        '       https://packages.opentofu.org/opentofu/tofu/gpgkey' \
+        'sslverify=1' \
+        'sslcacert=/etc/pki/tls/certs/ca-bundle.crt' \
+        'metadata_expire=300' \
+        > /etc/yum.repos.d/opentofu.repo \
+    && dnf -y --setopt=install_weak_deps=False install tofu \
+    && dnf clean all
+
+# Salt from the Salt Project RPM repository (hosted on
+# Broadcom's Artifactory since 2024), following the project's
+# own install documentation: it publishes a ready-made
+# salt.repo file that serves every RPM-based distribution (the
+# onedir packages bundle their own Python, built for broad
+# glibc compatibility).  salt-master and salt-minion install
+# their daemons; salt-ssh works agentless over SSH, and
+# salt-call --local (from salt-common) applies states
+# masterless.  There is no init system here, so run the daemons
+# in the foreground:
+#   salt-master -l info
+#   salt-minion -l info
+RUN curl -fsSL -o /etc/yum.repos.d/salt.repo \
+        https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.repo \
+    && dnf -y --setopt=install_weak_deps=False install \
+        salt-master \
+        salt-minion \
+        salt-ssh \
+    && dnf clean all
+
+# CockroachDB, from the upstream binary tarball: it is not
+# packaged by any distribution used here, and Cockroach Labs
+# publishes the same binaries for every Linux.  The binary is
+# about 320 MB.  The script has the command that starts a
+# single-node cluster.
+COPY tools/install-cockroachdb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-cockroachdb.sh
+
+# YugabyteDB, from the upstream binary tarball, for the same
+# reason as CockroachDB above.  It is by far the largest thing
+# this file adds to Oracle's image: the unpacked release is
+# about 1.4 GB.  The script has the commands that start and
+# stop a single node.
+COPY tools/install-yugabytedb.sh /opt/aisandbox/
+RUN /opt/aisandbox/install-yugabytedb.sh
+
+# Unlike base/Containerfile.ubuntu, which renames the stock ubuntu
+# user, Oracle's image has no uid-1000 user, so create one
+# named after the invoking host user for agent work (the
+# database itself runs as the oracle user, uid 54321).  Claude
+# Code and other agents key per-project state on absolute
+# paths, so /home/<user> must match the host for sessions
+# started on one side to resume on the other.  USERSHELL gives
+# the user the same login shell as on the host so ${SHELL} and
+# anything that spawns it behave alike.
+ARG USERNAME=sandbox
+ARG USERSHELL=/bin/bash
+RUN useradd -m -u 1000 -s "${USERSHELL}" "${USERNAME}" \
+    && mkdir -p "/home/${USERNAME}/work" \
+    && chown "${USERNAME}:${USERNAME}" "/home/${USERNAME}/work"
+
+# The CMD inherited from Oracle's image would start the
+# database; start-aisandbox's idle command replaces it, so
+# nothing starts the database and whatever needs one starts it
+# itself (see the ../Containerfile.oracle header).
+# ../Containerfile.oracle switches to root for its installs and
+# ends as the oracle user again.
+USER oracle

@@ -1,30 +1,24 @@
-# AI CLI sandbox on Ubuntu 24.04 LTS.
-#
-# Ubuntu was chosen because it is the distro all of these tools
-# support out of the box: Kiro ships an Ubuntu .deb, and the
-# goose and aider install scripts target Debian/Ubuntu first.
+# AI CLI sandbox on Ubuntu 24.04 LTS: the coding agents, on top
+# of the base image that base/Containerfile.ubuntu builds with
+# everything else (development tools, linters, toolchains,
+# database servers and client libraries).  The agents release
+# far more often than anything in the base, so they are a
+# separate image: rebuilding this file without the layer cache
+# reruns only the steps below, while the base is rebuilt on its
+# own schedule.
 #
 # Agents installed (command names in parentheses):
 #   Claude Code (claude), Codex CLI (codex), Kiro CLI (kiro-cli),
 #   opencode, openclaw, goose, pi, aider
 #
-# Steps that install a tool the same way in every flavor run a
-# script from tools/, which carries that tool's own notes and
-# version pin; this file keeps what is specific to Ubuntu.  The
-# scripts are copied to /opt/aisandbox in the image, one COPY
-# per step, so editing a script reruns only its own step and
-# the ones after it.
+# The agents that install the same way in every flavor come
+# from scripts in tools/, as in the base; this file keeps what
+# is specific to Ubuntu (the Kiro package).
 #
-# Build with the container user named after the invoking user so
-# absolute paths (and the session state that tools key on them)
-# match between host and container:
+# Build with update-aisandbox, which builds the base image when
+# it is missing and then this file with --no-cache:
 #
-#   podman build --build-arg USERNAME="$(id -un)" \
-#       --build-arg USERSHELL="${SHELL}" \
-#       -t aisandbox -f Containerfile.ubuntu .
-#
-# Containerfile.oracle is a variant of this image that also runs
-# Oracle Database Free; see its header for the differences.
+#   ./update-aisandbox
 #
 # Start with the start-aisandbox script.
 #
@@ -32,162 +26,15 @@
 # with the zip from
 # https://desktop-release.q.us-east-1.amazonaws.com/latest/kirocli-aarch64-linux.zip
 
-FROM docker.io/library/ubuntu:24.04
+# BASE names the base image; update-aisandbox passes the one it
+# built (AISANDBOX_IMAGE with -base appended).  Both engines
+# substitute an ARG declared before FROM into the FROM line.
+ARG BASE=aisandbox-base
+FROM ${BASE}
 
-# DEBIAN_FRONTEND is a build argument rather than an environment
-# variable: it keeps apt from prompting during the build without
-# following the image into the running container, where someone
-# installing a package by hand should still see the prompts.
-ARG DEBIAN_FRONTEND=noninteractive
-
-ENV LANG=C.UTF-8
-
-# Everything installed from Ubuntu's repositories, in one layer:
-#
-# - common development tools, plus runtime libraries the agents
-#   need (libdbus-1-3/libxcb1 for goose's keyring, bzip2 for its
-#   release tarball), and zsh;
-# - linters: C/C++ (cppcheck, clang-tidy, clang-format, splint),
-#   Python (pylint, flake8, mypy, black), shell (shellcheck,
-#   shfmt), YAML (yamllint), Lua (lua-check), Perl
-#   (libperl-critic-perl), XML (libxml2-utils), HTML (tidy), and
-#   spelling (codespell);
-# - clangd: the C/C++ language server, for LSP-based code
-#   navigation and diagnostics;
-# - documentation toolchain: python3-docutils (rst2html and the
-#   other rst2* tools), sphinx, and everything the PostgreSQL
-#   documentation build requires (docbook-xml, docbook-xsl,
-#   xsltproc, fop, libxml2-utils);
-# - build systems: meson and ninja, plus the Go toolchain (gofmt
-#   and go vet come with it);
-# - observability: sysstat (sar, pidstat, iostat, mpstat),
-#   collectd (no init system here, so run it in the foreground:
-#   "collectd -f -C <config>"), and perf;
-# - document and image handling: pandoc, poppler-utils
-#   (pdftotext and friends, so agents can read PDFs),
-#   ghostscript (gs plus the ps2pdf/pdf2ps converters, which
-#   imagemagick also calls for PostScript and PDF input),
-#   graphviz, and imagemagick;
-# - benchmarking and code statistics: hyperfine and cloc, plus
-#   entr to watch files and rerun commands;
-# - database client development files: libmysqlclient-dev
-#   (MySQL C API headers and mysql_config, for building client
-#   programs; PostgreSQL's and Oracle's equivalents come from
-#   PGDG and Oracle Instant Client in later layers) and
-#   libsqlite3-dev (SQLite C API headers and library);
-# - libev-dev: libev event-loop library headers, for building
-#   programs that use it;
-# - everyday utilities the agents expect to find: file, git-lfs,
-#   moreutils (sponge), rsync, sqlite3, dos2unix, and zstd;
-# - shunit2 shell-script unit-test framework.
-#
-# At the end, "git lfs install --system" registers the LFS
-# filters so clones fetch LFS content, and two symlinks: Ubuntu
-# names the fd binary fdfind, and Ubuntu's /usr/bin/perf wrapper
-# dispatches on the running kernel version, which inside a
-# container is the host's kernel and never matches an Ubuntu
-# tools package, so link the real binary.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        bash-completion \
-        bison \
-        black \
-        build-essential \
-        bzip2 \
-        ca-certificates \
-        clang-format \
-        clang-tidy \
-        clangd \
-        cloc \
-        cmake \
-        codespell \
-        collectd \
-        collectd-utils \
-        cppcheck \
-        cscope \
-        curl \
-        docbook-xml \
-        docbook-xsl \
-        dos2unix \
-        entr \
-        fd-find \
-        file \
-        flake8 \
-        flex \
-        fop \
-        fzf \
-        gdb \
-        ghostscript \
-        git \
-        git-lfs \
-        gnupg \
-        gnuplot \
-        golang-go \
-        graphviz \
-        hyperfine \
-        imagemagick \
-        jq \
-        less \
-        libdbus-1-3 \
-        libev-dev \
-        libmysqlclient-dev \
-        libperl-critic-perl \
-        libsqlite3-dev \
-        libxcb1 \
-        libxml2-utils \
-        linux-tools-generic \
-        lua-check \
-        man-db \
-        meson \
-        moreutils \
-        mypy \
-        neovim \
-        ninja-build \
-        openssh-client \
-        pandoc \
-        patch \
-        pkg-config \
-        poppler-utils \
-        pylint \
-        python3 \
-        python3-docutils \
-        python3-pip \
-        python3-sphinx \
-        python3-venv \
-        quilt \
-        ripgrep \
-        rsync \
-        shellcheck \
-        shfmt \
-        shunit2 \
-        splint \
-        sqlite3 \
-        strace \
-        sysstat \
-        tidy \
-        tmux \
-        tree \
-        universal-ctags \
-        unzip \
-        wget \
-        xsltproc \
-        xz-utils \
-        yamllint \
-        zip \
-        zsh \
-        zstd \
-    && rm -rf /var/lib/apt/lists/* \
-    && git lfs install --system \
-    && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
-    && ln -s "$(find /usr/lib/linux-tools* -name perf | head -1)" \
-        /usr/local/bin/perf
-
-# Helper library the install scripts below source; every step
-# after this one reruns when it changes.
-COPY tools/lib.sh /opt/aisandbox/
-
-COPY tools/install-node.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-node.sh
+# The base image ends as its unprivileged user; the installs
+# below write to /usr/local and /opt, so run them as root.
+USER root
 
 # Kiro CLI from the official Ubuntu package (installs system-wide,
 # unlike the per-user https://cli.kiro.dev/install script).
@@ -198,326 +45,27 @@ RUN curl -fsSL -o /tmp/kiro-cli.deb \
     && rm -f /tmp/kiro-cli.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# GitHub CLI (gh) from GitHub's own apt repository: Ubuntu 24.04
-# freezes gh at 2.45.0, while the upstream repository tracks
-# current releases.
-RUN key=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL -o "${key}" \
-        https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    && chmod a+r "${key}" \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
-        "https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
-
-# PostgreSQL development packages (libpq and server headers, for
-# building client programs and extensions) from the PGDG apt
-# repository: Ubuntu 24.04 freezes PostgreSQL at 16, while PGDG
-# tracks current releases.  postgresql-common ships the official
-# repository setup script, which writes pgdg.sources using its
-# bundled signing key and runs apt-get update itself; -y skips
-# its confirmation prompt, and it sticks to apt-get throughout.
-# postgresql-server-dev-all covers every major version PGDG
-# still publishes (currently 10 through 18), so only the server
-# package names a major version; bump PG_MAJOR to move it.
-ARG PG_MAJOR=18
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        postgresql-common \
-    && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
-    && apt-get install -y --no-install-recommends \
-        libpq-dev \
-        postgresql-server-dev-all \
-        "postgresql-${PG_MAJOR}" \
-    && rm -rf /var/lib/apt/lists/*
-
-# Oracle Instant Client, Basic Light and SDK packages: OCI
-# client libraries and headers, completing the database client
-# development files from the first layer.  Downloaded from
-# Oracle's permanent latest-version links under the Oracle Free
-# Distribution, Hosting, and Use Terms and Conditions (the
-# *_LICENSE files land in the install directory); amd64 zips,
-# like the Kiro CLI step above (Oracle publishes arm64 zips
-# only under version-numbered URLs).  Basic Light carries
-# English-only error messages and Unicode character sets; swap
-# "basiclite" for "basic" if full NLS support is ever needed.
-# The zips unpack into a version-named directory
-# (instantclient_23_26 today); the unversioned
-# /opt/oracle/instantclient symlink gives compiler flags a
-# stable path (headers in sdk/include), and the ld.so.conf.d
-# entry makes the libraries visible system-wide.  Ubuntu
-# 24.04's 64-bit time_t transition renamed libaio's soname to
-# libaio.so.1t64, while libclntsh needs libaio.so.1, hence the
-# compatibility symlink.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libaio1t64 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s libaio.so.1t64 \
-        /usr/lib/x86_64-linux-gnu/libaio.so.1 \
-    && u="https://download.oracle.com/otn_software/linux/instantclient" \
-    && mkdir -p /opt/oracle \
-    && cd /tmp \
-    && for f in instantclient-basiclite-linuxx64.zip \
-            instantclient-sdk-linuxx64.zip; do \
-        curl -fsSL -O "${u}/${f}" \
-        && unzip -oq "${f}" -d /opt/oracle \
-        && rm -f "${f}" \
-        || exit 1; \
-    done \
-    && rm -rf /opt/oracle/META-INF \
-    && ln -s /opt/oracle/instantclient_* /opt/oracle/instantclient \
-    && echo /opt/oracle/instantclient \
-        > /etc/ld.so.conf.d/oracle-instantclient.conf \
-    && ldconfig
-
-# MySQL server from Ubuntu's repositories, and unixODBC: unlike
-# PostgreSQL, Ubuntu keeps MySQL patched (8.0.x), so no
-# third-party repository is needed.  unixodbc-dev completes the
-# database client development files from the earlier layers with
-# the ODBC API headers (sql.h and friends), libraries, and
-# pkg-config files, while unixodbc (isql, iusql) and odbcinst
-# supply the command-line tools for testing connections and
-# registering drivers.  A separate layer rather than an addition
-# to the first one so the toolchain layer's build cache
-# survives.
-#
-# As with collectd, there is no init system here, and the MySQL
-# package's /var/lib/mysql is not writable by the container
-# user, so initialize a data directory in ${HOME} and run the
-# server in the foreground:
-#   mysqld --initialize-insecure --datadir="${HOME}/mysql"
-#   mysqld --datadir="${HOME}/mysql" \
-#       --socket="${HOME}/mysql/mysql.sock"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        mysql-server-8.0 \
-        odbcinst \
-        unixodbc \
-        unixodbc-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# R from CRAN's apt repository, set up like the GitHub CLI step
-# above: Ubuntu 24.04 freezes R at 4.3.3, while CRAN tracks
-# current releases (and publishes both amd64 and arm64
-# packages).  r-base-dev brings the headers and toolchain that
-# install.packages() needs to build packages from source.
-RUN key=/etc/apt/keyrings/cran-archive-keyring.asc \
-    && curl -fsSL -o "${key}" \
-        https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
-    && chmod a+r "${key}" \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
-        "https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
-        > /etc/apt/sources.list.d/cran.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        r-base \
-        r-base-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY tools/install-npm-agents.sh /opt/aisandbox/
 RUN /opt/aisandbox/install-npm-agents.sh
 
 COPY tools/install-goose.sh /opt/aisandbox/
 RUN /opt/aisandbox/install-goose.sh
 
-COPY tools/install-uv.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-uv.sh
-
 # aider, installed the way its own install script does (via uv)
-# but into system-wide locations so any user can run it.
+# but into system-wide locations so any user can run it.  The
+# base image holds a copy of the script already, for its Python
+# linters, but this file copies its own so that an edit takes
+# effect on the next agent build rather than the next base
+# build.
 COPY tools/install-uv-tools.sh /opt/aisandbox/
 RUN /opt/aisandbox/install-uv-tools.sh aider-chat
-
-COPY tools/install-npm-linters.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-npm-linters.sh
-
-# Python-based tools either not packaged by Ubuntu or much newer
-# upstream, installed like aider: reStructuredText (doc8,
-# rst-lint), SQL (sqlfluff), C++ style (cpplint), prose
-# (proselint), ruff (the Python linter/formatter most agents now
-# default to), and pre-commit (many repositories gate on
-# "pre-commit run").
-RUN /opt/aisandbox/install-uv-tools.sh \
-        cpplint \
-        doc8 \
-        pre-commit \
-        proselint \
-        restructuredtext-lint \
-        ruff \
-        sqlfluff
-
-COPY tools/install-hadolint.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-hadolint.sh
-
-COPY tools/install-golangci-lint.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-golangci-lint.sh
-
-COPY tools/install-actionlint.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-actionlint.sh
-
-COPY tools/install-gitleaks.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-gitleaks.sh
-
-COPY tools/install-yq.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-yq.sh
-
-COPY tools/install-ast-grep.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-ast-grep.sh
-
-COPY tools/install-rust.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-rust.sh
-ENV RUSTUP_HOME=/opt/rust \
-    PATH=/opt/rust/bin:${PATH}
-
-COPY tools/install-julia.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-julia.sh
-
-# Generate the en_US.UTF-8 locale.  The locales package is
-# already present (the PostgreSQL server package depends on it)
-# but ships with every locale commented out in /etc/locale.gen,
-# so the image only has the C/POSIX/C.utf8 locales built into
-# glibc; tools such as PostgreSQL's initdb and CREATE DATABASE
-# expect en_US.UTF-8 to exist.  A separate layer near the end,
-# like the MySQL one above, so the earlier layers' build caches
-# survive.
-RUN sed -i 's/^# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
-        /etc/locale.gen \
-    && locale-gen
-
-COPY tools/install-awscli.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-awscli.sh
-
-COPY tools/install-session-manager-plugin.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-session-manager-plugin.sh
-
-# Terraform from HashiCorp's apt repository, set up like the
-# GitHub CLI step above; the repository tracks current releases
-# and publishes both amd64 and arm64 packages.  HashiCorp
-# serves its signing key ASCII-armored, hence the gpg --dearmor
-# step (gnupg comes from the first layer).  Terraform is under
-# the Business Source License since 1.6; the OpenTofu step
-# below installs the open-source fork.
-RUN key=/etc/apt/keyrings/hashicorp-archive-keyring.gpg \
-    && curl -fsSL https://apt.releases.hashicorp.com/gpg \
-        | gpg --dearmor -o "${key}" \
-    && chmod a+r "${key}" \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
-        "https://apt.releases.hashicorp.com noble main" \
-        > /etc/apt/sources.list.d/hashicorp.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends terraform \
-    && rm -rf /var/lib/apt/lists/*
-
-# OpenTofu (tofu), the open-source Terraform fork, from its
-# packagecloud apt repository, following the project's own
-# install documentation: the repository is signed with two keys
-# (the OpenTofu project key, distributed in binary form, and
-# the packagecloud repository key, ASCII-armored), so both are
-# installed and listed in signed-by.  The "any" suite serves
-# every deb-based distribution.
-RUN k1=/etc/apt/keyrings/opentofu.gpg \
-    && k2=/etc/apt/keyrings/opentofu-repo.gpg \
-    && curl -fsSL -o "${k1}" https://get.opentofu.org/opentofu.gpg \
-    && curl -fsSL https://packages.opentofu.org/opentofu/tofu/gpgkey \
-        | gpg --dearmor -o "${k2}" \
-    && chmod a+r "${k1}" "${k2}" \
-    && echo "deb [signed-by=${k1},${k2}]" \
-        "https://packages.opentofu.org/opentofu/tofu/any/ any main" \
-        > /etc/apt/sources.list.d/opentofu.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends tofu \
-    && rm -rf /var/lib/apt/lists/*
-
-# Ansible from the ansible/ansible PPA, the repository the
-# official install guide points Ubuntu users at: Ubuntu 24.04
-# freezes ansible at 9.2 (ansible-core 2.16), while the PPA
-# tracks current releases (the packages are Architecture: all,
-# so every architecture is covered).  Launchpad serves PPA
-# signing keys through keyserver.ubuntu.com, ASCII-armored,
-# hence the gpg --dearmor step like the Terraform one above;
-# the fingerprint is the PPA's signing_key_fingerprint from the
-# Launchpad API.  The "ansible" package pulls in ansible-core
-# and adds the community collections.
-RUN key=/etc/apt/keyrings/ansible-archive-keyring.gpg \
-    && fpr=6125E2A8C77F2818FB7BD15B93C4A3FD7BB9C367 \
-    && curl -fsSL \
-        "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${fpr}" \
-    | gpg --dearmor -o "${key}" \
-    && chmod a+r "${key}" \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=${key}]" \
-        "https://ppa.launchpadcontent.net/ansible/ansible/ubuntu" \
-        "noble main" \
-        > /etc/apt/sources.list.d/ansible.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ansible \
-    && rm -rf /var/lib/apt/lists/*
-
-# Salt from the Salt Project apt repository (hosted on
-# Broadcom's Artifactory since 2024), following the project's
-# own install documentation: it publishes a ready-made deb822
-# salt.sources file whose Signed-By names the keyring path used
-# below, and serves the signing key ASCII-armored, which apt
-# accepts directly in a keyring file.  The "stable" suite
-# carries amd64 and arm64 onedir packages; no version is pinned
-# (the docs suggest an apt pin), so, as with PGDG, new releases
-# arrive when this layer reruns.  salt-master and salt-minion
-# install their daemons; salt-ssh works agentless over SSH, and
-# salt-call --local (from salt-common) applies states
-# masterless.  As with collectd and MySQL above there is no
-# init system here, so run the daemons in the foreground:
-#   salt-master -l info
-#   salt-minion -l info
-RUN key=/etc/apt/keyrings/salt-archive-keyring.pgp \
-    && curl -fsSL -o "${key}" \
-        https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public \
-    && chmod a+r "${key}" \
-    && curl -fsSL -o /etc/apt/sources.list.d/salt.sources \
-        https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        salt-master \
-        salt-minion \
-        salt-ssh \
-    && rm -rf /var/lib/apt/lists/*
-
-# CockroachDB, from the upstream binary tarball: it is not
-# packaged by any distribution used here, and Cockroach Labs
-# publishes the same binaries for every Linux.  The binary is
-# about 320 MB.  The script has the command that starts a
-# single-node cluster.
-COPY tools/install-cockroachdb.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-cockroachdb.sh
-
-# YugabyteDB, from the upstream binary tarball, for the same
-# reason as CockroachDB above.  It is by far the largest thing
-# in this image: the unpacked release is about 1.4 GB.  The
-# script has the commands that start and stop a single node.
-COPY tools/install-yugabytedb.sh /opt/aisandbox/
-RUN /opt/aisandbox/install-yugabytedb.sh
-
-# Rename the stock "ubuntu" user (uid 1000) after the invoking
-# host user, and give it the same login shell as on the host so
-# ${SHELL} and anything that spawns it behave alike.  Claude
-# Code and other agents key per-project state on absolute paths,
-# so /home/<user> must match the host for sessions started on
-# one side to resume on the other.
-ARG USERNAME=ubuntu
-ARG USERSHELL=/bin/bash
-RUN if [ "${USERNAME}" != "ubuntu" ]; then \
-        usermod -l "${USERNAME}" -d "/home/${USERNAME}" -m \
-            ubuntu \
-        && groupmod -n "${USERNAME}" ubuntu; \
-    fi \
-    && usermod -s "${USERSHELL}" "${USERNAME}"
 
 # Updating inside a container makes no sense; pin what was built.
 ENV DISABLE_AUTOUPDATER=1
 
-# Run unprivileged; several agents complain when run as root.
-USER ${USERNAME}
-WORKDIR /home/${USERNAME}/work
-
-CMD ["/bin/bash"]
+# Back to the unprivileged user the base image created, by uid
+# so that this file needs no USERNAME argument: the base renamed
+# the stock ubuntu user (uid 1000) after the invoking host user,
+# and 1000 is what open-shell and start-aisandbox use as well.
+# Several agents complain when run as root.
+USER 1000
